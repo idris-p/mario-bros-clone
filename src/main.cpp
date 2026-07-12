@@ -26,6 +26,7 @@ struct Player
     float invulnerabilityTimer;
     bool sprinting;
     bool facingLeft;
+    bool dying;
 };
 
 struct SuperMushroom
@@ -59,6 +60,7 @@ struct Goomba
     bool onGround;
     bool alive;
     bool spawned;
+    bool dying;
 };
 
 struct Koopa
@@ -69,7 +71,37 @@ struct Koopa
     bool alive;
     bool spawned;
     bool shelled;
+    bool dying;
 };
+
+void KillGoomba(Goomba& goomba)
+{
+    if (goomba.alive && !goomba.dying)
+    {
+        goomba.dying = true;
+        goomba.velocity = {0.0f, -240.0f};
+    }
+}
+
+void KillKoopa(Koopa& koopa)
+{
+    if (koopa.alive && !koopa.dying)
+    {
+        koopa.dying = true;
+        koopa.velocity = {0.0f, -240.0f};
+    }
+}
+
+void KillPlayer(Player& player)
+{
+    if (!player.dying)
+    {
+        player.dying = true;
+        player.velocity = {0.0f, -650.0f};
+        player.onGround = false;
+        player.sprinting = false;
+    }
+}
 
 struct Coin
 {
@@ -90,6 +122,7 @@ struct BlockBump
     int column;
     float age;
     float offsetY;
+    float previousOffsetY;
 };
 
 std::vector<BlockBump> blockBumps;
@@ -261,16 +294,23 @@ void StartBlockBump(int row, int column)
         }
     }
 
-    blockBumps.push_back({row, column, 0.0f, 0.0f});
+    blockBumps.push_back({row, column, 0.0f, 0.0f, 0.0f});
 }
 
-void UpdateBlockBumps(float deltaTime)
+void UpdateBlockBumps(
+    float deltaTime,
+    std::vector<SuperMushroom>& mushrooms,
+    std::vector<FireFlower>& fireFlowers,
+    std::vector<Goomba>& goombas,
+    std::vector<Koopa>& koopas
+)
 {
     constexpr float bumpDuration = 0.22f;
     constexpr float bumpHeight = 10.0f;
 
     for (BlockBump& bump : blockBumps)
     {
+        bump.previousOffsetY = bump.offsetY;
         bump.age += deltaTime;
 
         float progress = std::clamp(
@@ -281,6 +321,70 @@ void UpdateBlockBumps(float deltaTime)
 
         bump.offsetY =
             -std::sin(progress * PI) * bumpHeight;
+
+        float movementY =
+            bump.offsetY - bump.previousOffsetY;
+
+        Rectangle previousBlock{
+            static_cast<float>(bump.column * tileSize),
+            static_cast<float>(bump.row * tileSize) +
+                bump.previousOffsetY,
+            static_cast<float>(tileSize),
+            static_cast<float>(tileSize)
+        };
+
+        auto carryBody =
+            [&previousBlock, movementY](Rectangle& body)
+            {
+                constexpr float footTolerance = 4.0f;
+
+                bool horizontallyOverlapping =
+                    body.x + body.width > previousBlock.x &&
+                    body.x < previousBlock.x + previousBlock.width;
+
+                float bodyBottom = body.y + body.height;
+
+                if (
+                    horizontallyOverlapping &&
+                    std::abs(bodyBottom - previousBlock.y) <=
+                        footTolerance
+                )
+                {
+                    body.y += movementY;
+                }
+            };
+
+        for (SuperMushroom& mushroom : mushrooms)
+        {
+            if (!mushroom.collected && !mushroom.emerging)
+            {
+                carryBody(mushroom.body);
+            }
+        }
+
+        for (FireFlower& flower : fireFlowers)
+        {
+            if (!flower.collected && !flower.emerging)
+            {
+                carryBody(flower.body);
+            }
+        }
+
+        for (Goomba& goomba : goombas)
+        {
+            if (goomba.alive && !goomba.dying && goomba.spawned)
+            {
+                carryBody(goomba.body);
+            }
+        }
+
+        for (Koopa& koopa : koopas)
+        {
+            if (koopa.alive && !koopa.dying && koopa.spawned)
+            {
+                carryBody(koopa.body);
+            }
+        }
     }
 
     std::erase_if(
@@ -395,6 +499,7 @@ std::vector<Goomba> FindGoombaSpawns(
 				{-90.0f, 0.0f},
 				false,
 				true,
+				false,
 				false
 			};
 
@@ -430,6 +535,7 @@ std::vector<Koopa> FindKoopaSpawns(
                 {-90.0f, 0.0f},
                 false,
                 true,
+                false,
                 false,
                 false
             });
@@ -576,7 +682,10 @@ void UpdateSuperMushrooms(
                 continue;
             }
 
-            if (mushroom.velocity.y > 0.0f && previousY + mushroom.body.height <= tile.y)
+            if (
+                mushroom.velocity.y > 0.0f &&
+                previousY + mushroom.body.height <= tile.y + 10.0f
+            )
             {
                 mushroom.body.y = tile.y - mushroom.body.height;
                 mushroom.velocity.y = 0.0f;
@@ -739,11 +848,12 @@ void UpdateFireBalls(
         {
             if (
                 goomba.alive &&
+                !goomba.dying &&
                 goomba.spawned &&
                 CheckCollisionRecs(fireBall.body, goomba.body)
             )
             {
-                goomba.alive = false;
+                KillGoomba(goomba);
                 fireBall.alive = false;
                 break;
             }
@@ -754,11 +864,12 @@ void UpdateFireBalls(
             if (
                 fireBall.alive &&
                 koopa.alive &&
+                !koopa.dying &&
                 koopa.spawned &&
                 CheckCollisionRecs(fireBall.body, koopa.body)
             )
             {
-                koopa.alive = false;
+                KillKoopa(koopa);
                 fireBall.alive = false;
                 break;
             }
@@ -1000,7 +1111,7 @@ void HitEntitiesAboveBlock(
             IsEntityStandingOnBlock(goomba.body, block)
         )
         {
-            goomba.alive = false;
+            KillGoomba(goomba);
         }
     }
 
@@ -1012,7 +1123,7 @@ void HitEntitiesAboveBlock(
             IsEntityStandingOnBlock(koopa.body, block)
         )
         {
-            koopa.alive = false;
+            KillKoopa(koopa);
         }
     }
 }
@@ -1093,7 +1204,7 @@ void ResolvePlayerVerticalCollisions(
                 previousY +
                 player.body.height;
 
-            if (previousBottom <= tile.y)
+            if (previousBottom <= tile.y + 10.0f)
             {
                 player.body.y =
                     tile.y -
@@ -1366,7 +1477,7 @@ void ResolveGoombaVerticalCollisions(
                 previousY +
                 goomba.body.height;
 
-            if (previousBottom <= tile.y)
+            if (previousBottom <= tile.y + 10.0f)
             {
                 goomba.body.y =
                     tile.y -
@@ -1406,6 +1517,19 @@ void UpdateGoombas(
 		{
 			continue;
 		}
+
+        if (goomba.dying)
+        {
+            goomba.velocity.y += gravity * deltaTime;
+            goomba.body.y += goomba.velocity.y * deltaTime;
+
+            if (goomba.body.y > GetLevelHeight(level) + 200.0f)
+            {
+                goomba.alive = false;
+            }
+
+            continue;
+        }
 
         goomba.velocity.y +=
             gravity * deltaTime;
@@ -1537,7 +1661,10 @@ void ResolveKoopaVerticalCollisions(
             continue;
         }
 
-        if (koopa.velocity.y > 0.0f && previousY + koopa.body.height <= tile.y)
+        if (
+            koopa.velocity.y > 0.0f &&
+            previousY + koopa.body.height <= tile.y + 10.0f
+        )
         {
             koopa.body.y = tile.y - koopa.body.height;
             koopa.velocity.y = 0.0f;
@@ -1562,6 +1689,19 @@ void UpdateKoopas(
     {
         if (!koopa.alive || !koopa.spawned)
         {
+            continue;
+        }
+
+        if (koopa.dying)
+        {
+            koopa.velocity.y += gravity * deltaTime;
+            koopa.body.y += koopa.velocity.y * deltaTime;
+
+            if (koopa.body.y > GetLevelHeight(level) + 200.0f)
+            {
+                koopa.alive = false;
+            }
+
             continue;
         }
 
@@ -1615,6 +1755,7 @@ bool HandlePlayerGoombaCollisions(
     {
         if (
 			!goomba.alive ||
+			goomba.dying ||
 			!goomba.spawned ||
 			!CheckCollisionRecs(
 				player.body,
@@ -1669,7 +1810,12 @@ bool HandlePlayerKoopaCollisions(
 
     for (Koopa& koopa : koopas)
     {
-        if (!koopa.alive || !koopa.spawned || !CheckCollisionRecs(player.body, koopa.body))
+        if (
+            !koopa.alive ||
+            koopa.dying ||
+            !koopa.spawned ||
+            !CheckCollisionRecs(player.body, koopa.body)
+        )
         {
             continue;
         }
@@ -1771,6 +1917,7 @@ void HandleMovingShellEnemyCollisions(
     {
         if (
             !shell.alive ||
+            shell.dying ||
             !shell.spawned ||
             !shell.shelled ||
             std::abs(shell.velocity.x) <= 1.0f
@@ -1783,11 +1930,12 @@ void HandleMovingShellEnemyCollisions(
         {
             if (
                 goomba.alive &&
+                !goomba.dying &&
                 goomba.spawned &&
                 CheckCollisionRecs(shell.body, goomba.body)
             )
             {
-                goomba.alive = false;
+                KillGoomba(goomba);
             }
         }
 
@@ -1796,6 +1944,7 @@ void HandleMovingShellEnemyCollisions(
             if (
                 &enemy != &shell &&
                 enemy.alive &&
+                !enemy.dying &&
                 enemy.spawned &&
                 CheckCollisionRecs(shell.body, enemy.body)
             )
@@ -1804,11 +1953,11 @@ void HandleMovingShellEnemyCollisions(
                     enemy.shelled &&
                     std::abs(enemy.velocity.x) > 1.0f;
 
-                enemy.alive = false;
+                KillKoopa(enemy);
 
                 if (enemyIsMovingShell)
                 {
-                    shell.alive = false;
+                    KillKoopa(shell);
                     break;
                 }
             }
@@ -1825,6 +1974,7 @@ void HandleStationaryShellEnemyCollisions(
     {
         if (
             !shell.alive ||
+            shell.dying ||
             !shell.spawned ||
             !shell.shelled ||
             std::abs(shell.velocity.x) > 1.0f
@@ -1837,6 +1987,7 @@ void HandleStationaryShellEnemyCollisions(
         {
             if (
                 !goomba.alive ||
+                goomba.dying ||
                 !goomba.spawned ||
                 !CheckCollisionRecs(shell.body, goomba.body)
             )
@@ -1861,6 +2012,7 @@ void HandleStationaryShellEnemyCollisions(
             if (
                 &enemy == &shell ||
                 !enemy.alive ||
+                enemy.dying ||
                 !enemy.spawned ||
                 enemy.shelled ||
                 !CheckCollisionRecs(shell.body, enemy.body)
@@ -2252,6 +2404,12 @@ void DrawGoomba(
     Rectangle source =
         GetFirstSquareFrame(texture);
 
+    if (goomba.dying)
+    {
+        source.y += source.height;
+        source.height = -source.height;
+    }
+
     Rectangle destination{
         goomba.body.x - 4.0f,
         goomba.body.y +
@@ -2290,6 +2448,12 @@ void DrawKoopa(
     Rectangle source = koopa.shelled
         ? Rectangle{0.0f, 0.0f, 16.0f, 14.0f}
         : Rectangle{0.0f, 0.0f, 16.0f, 23.0f};
+
+    if (koopa.dying)
+    {
+        source.y += source.height;
+        source.height = -source.height;
+    }
 
     constexpr float spriteWidth = 48.0f;
 
@@ -2435,6 +2599,8 @@ void RespawnPlayer(
     Player& player,
     const Vector2& spawn,
     Camera2D& camera,
+    Level& level,
+    const Level& initialLevel,
     std::vector<Coin>& coins,
     const std::vector<Coin>& initialCoins,
     std::vector<BlockCoin>& blockCoins,
@@ -2464,6 +2630,7 @@ void RespawnPlayer(
     player.invulnerabilityTimer = 0.0f;
     player.sprinting = false;
     player.facingLeft = false;
+    player.dying = false;
 
     jumpBufferTimer = 0.0f;
     coyoteTimer = 0.0f;
@@ -2472,6 +2639,8 @@ void RespawnPlayer(
         virtualWidth / 2.0f,
         virtualHeight / 2.0f
     };
+
+    level = initialLevel;
 
     coins = initialCoins;
     blockCoins.clear();
@@ -2524,7 +2693,7 @@ int main()
         "................Q...BMBQB.....................Hh.........Hh..................BAB..............C.....BB....Q..Q..Q.....B..........BB......S..S..........SS..S............BBQB............SSSSSS......................",
         "......................................Hh......Vv.........Vv.............................................................................SS..SS........SSS..SS..........................SSSSSSS......................",
         "............................Hh........Vv......Vv.........Vv............................................................................SSS..SSS......SSSS..SSS.....Hh..............Hh.SSSSSSSS........F.............",
-        "...P.................G......Vv........Vv.G....Vv.....G.G.Vv....................................G.G........K.................GG.G.G....SSSS..SSSS....SSSSS..SSSS....Vv.........GG...VvSSSSSSSSS........S.............",
+        "...P........K....K...G......Vv........Vv.G....Vv.....G.G.Vv....................................G.G........K.................GG.G.G....SSSS..SSSS....SSSSS..SSSS....Vv.........GG...VvSSSSSSSSS........S.............",
         "#####################################################################..###############...################################################################..#########################################################",
         "#####################################################################..###############...################################################################..#########################################################",
         "#####################################################################..###############...################################################################..#########################################################",
@@ -2532,6 +2701,8 @@ int main()
     };
 
     NormaliseLevel(level);
+
+    const Level initialLevel = level;
 
     if (
         level.empty() ||
@@ -2701,6 +2872,7 @@ int main()
         false,
         0.0f,
         false,
+        false,
         false
     };
 
@@ -2761,7 +2933,13 @@ int main()
             player.invulnerabilityTimer - deltaTime
         );
 
-        UpdateBlockBumps(deltaTime);
+        UpdateBlockBumps(
+            deltaTime,
+            mushrooms,
+            fireFlowers,
+            goombas,
+            koopas
+        );
 
         bool wasOnGround =
             player.onGround;
@@ -2831,6 +3009,7 @@ int main()
         // --------------------------------
 
         if (
+            !player.dying &&
             player.fire &&
             IsKeyPressed(KEY_SPACE) &&
             fireBalls.size() < 2
@@ -2861,8 +3040,11 @@ int main()
         }
 
         if (
-            (IsKeyPressed(KEY_SPACE) && !player.fire) ||
-            IsKeyPressed(KEY_W)
+            !player.dying &&
+            (
+                (IsKeyPressed(KEY_SPACE) && !player.fire) ||
+                IsKeyPressed(KEY_W)
+            )
         )
         {
             jumpBufferTimer =
@@ -2986,15 +3168,22 @@ int main()
 
         // Collect Coins
 
-        coinCount += CollectCoins(
-            player,
-            coins
-        );
+        if (!player.dying)
+        {
+            coinCount += CollectCoins(player, coins);
+        }
 
         // --------------------------------
         // Player physics
         // --------------------------------
 
+        if (player.dying)
+        {
+            player.velocity.y += gravity * deltaTime;
+            player.body.y += player.velocity.y * deltaTime;
+        }
+        else
+        {
         bool jumpHeld =
             (IsKeyDown(KEY_SPACE) && !player.fire) ||
             IsKeyDown(KEY_W);
@@ -3044,6 +3233,7 @@ int main()
             jumpBufferTimer = 0.0f;
             coyoteTimer = 0.0f;
         }
+        }
 
         // --------------------------------
         // Enemy physics
@@ -3072,10 +3262,16 @@ int main()
             gravity
         );
 
-        CollectSuperMushrooms(player, mushrooms);
+        if (!player.dying)
+        {
+            CollectSuperMushrooms(player, mushrooms);
+        }
 
         UpdateFireFlowers(fireFlowers, deltaTime);
-        CollectFireFlowers(player, fireFlowers);
+        if (!player.dying)
+        {
+            CollectFireFlowers(player, fireFlowers);
+        }
 
         UpdateFireBalls(
             fireBalls,
@@ -3096,14 +3292,14 @@ int main()
             goombas
         );
 
-        bool playerHitGoomba =
+        bool playerHitGoomba = !player.dying &&
             HandlePlayerGoombaCollisions(
                 player,
                 goombas,
                 previousPlayerBottom
             );
 
-        bool playerHitKoopa =
+        bool playerHitKoopa = !player.dying &&
             HandlePlayerKoopaCollisions(
                 player,
                 koopas,
@@ -3139,20 +3335,32 @@ int main()
         // Respawn
         // --------------------------------
 
-        bool playerFell =
-            player.body.y >
-            GetLevelHeight(level) +
-                200.0f;
+        float cameraBottom =
+            camera.target.y +
+            virtualHeight / (2.0f * camera.zoom);
 
-        if (
-            playerFell ||
-            playerHitEnemy
-        )
+        bool playerFell =
+            !player.dying &&
+            player.body.y > cameraBottom;
+
+        if (playerFell || playerHitEnemy)
+        {
+            KillPlayer(player);
+        }
+
+        bool deathAnimationFinished =
+            player.dying &&
+            player.velocity.y > 0.0f &&
+            player.body.y > cameraBottom + 100.0f;
+
+        if (deathAnimationFinished)
         {
             RespawnPlayer(
                 player,
                 spawn,
                 camera,
+                level,
+                initialLevel,
                 coins,
                 initialCoins,
                 blockCoins,
