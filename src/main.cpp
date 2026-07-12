@@ -12,6 +12,33 @@ struct Player
     bool onGround;
 };
 
+struct Goomba
+{
+    Rectangle body;
+    Vector2 velocity;
+    bool onGround;
+    bool alive;
+    bool spawned;
+};
+
+struct Coin
+{
+    Rectangle body;
+    bool collected;
+};
+
+struct GameTextures
+{
+    Texture2D ground;
+    Texture2D brick;
+    Texture2D questionBlock;
+    Texture2D stairBlock;
+    Texture2D pipe;
+    Texture2D coin;
+    Texture2D player;
+    Texture2D goomba;
+};
+
 using Level = std::vector<std::string>;
 
 // --------------------------------------------------
@@ -37,7 +64,7 @@ constexpr int virtualHeight =
 constexpr float cameraZoom = 1.0f;
 
 // --------------------------------------------------
-// Level
+// Level dimensions
 // --------------------------------------------------
 
 int GetLevelRows(const Level& level)
@@ -69,7 +96,6 @@ float GetLevelHeight(const Level& level)
     );
 }
 
-// Makes every row the same width by adding empty tiles.
 void NormaliseLevel(Level& level)
 {
     std::size_t widestRow = 0;
@@ -108,7 +134,17 @@ bool IsSolidTile(
         return false;
     }
 
-    return level[row][column] == '#';
+    char tile = level[row][column];
+
+    return
+        tile == '#' ||
+        tile == 'B' ||
+        tile == 'Q' ||
+        tile == 'S' ||
+        tile == 'H' ||
+        tile == 'h' ||
+        tile == 'V' ||
+        tile == 'v';
 }
 
 Rectangle GetTileRectangle(
@@ -151,6 +187,121 @@ Vector2 FindPlayerSpawn(const Level& level)
     return {100.0f, 300.0f};
 }
 
+std::vector<Coin> FindCoinSpawns(
+    const Level& level
+)
+{
+    std::vector<Coin> coins;
+
+    constexpr float coinWidth = 24.0f;
+    constexpr float coinHeight = 32.0f;
+
+    for (int row = 0; row < GetLevelRows(level); ++row)
+    {
+        for (
+            int column = 0;
+            column < GetLevelColumns(level);
+            ++column
+        )
+        {
+            if (level[row][column] != 'C')
+            {
+                continue;
+            }
+
+            float tileX =
+                column * static_cast<float>(tileSize);
+
+            float tileY =
+                row * static_cast<float>(tileSize);
+
+            coins.push_back({
+                {
+                    tileX +
+                        (tileSize - coinWidth) / 2.0f,
+
+                    tileY +
+                        (tileSize - coinHeight) / 2.0f,
+
+                    coinWidth,
+                    coinHeight
+                },
+                false
+            });
+        }
+    }
+
+    return coins;
+}
+
+std::vector<Goomba> FindGoombaSpawns(
+    const Level& level
+)
+{
+    std::vector<Goomba> goombas;
+
+    for (int row = 0; row < GetLevelRows(level); ++row)
+    {
+        for (
+            int column = 0;
+            column < GetLevelColumns(level);
+            ++column
+        )
+        {
+            if (level[row][column] != 'G')
+            {
+                continue;
+            }
+
+            Goomba goomba{
+				{
+					column * static_cast<float>(tileSize) + 4.0f,
+					row * static_cast<float>(tileSize) + 8.0f,
+					40.0f,
+					40.0f
+				},
+				{-90.0f, 0.0f},
+				false,
+				true,
+				false
+			};
+
+            goombas.push_back(goomba);
+        }
+    }
+
+    return goombas;
+}
+
+// Collect Coins
+
+int CollectCoins(
+    const Player& player,
+    std::vector<Coin>& coins
+)
+{
+    int collectedThisFrame = 0;
+
+    for (Coin& coin : coins)
+    {
+        if (
+            coin.collected ||
+            !CheckCollisionRecs(
+                player.body,
+                coin.body
+            )
+        )
+        {
+            continue;
+        }
+
+        coin.collected = true;
+        ++collectedThisFrame;
+    }
+
+    return collectedThisFrame;
+}
+
 // --------------------------------------------------
 // Nearby tile lookup
 // --------------------------------------------------
@@ -188,20 +339,14 @@ std::vector<Rectangle> GetNearbySolidTiles(
             )
         ) + 1;
 
-    leftColumn = std::max(
-        0,
-        leftColumn
-    );
+    leftColumn = std::max(0, leftColumn);
 
     rightColumn = std::min(
         GetLevelColumns(level) - 1,
         rightColumn
     );
 
-    topRow = std::max(
-        0,
-        topRow
-    );
+    topRow = std::max(0, topRow);
 
     bottomRow = std::min(
         GetLevelRows(level) - 1,
@@ -236,10 +381,10 @@ std::vector<Rectangle> GetNearbySolidTiles(
 }
 
 // --------------------------------------------------
-// Collision
+// Player collision
 // --------------------------------------------------
 
-void ResolveHorizontalCollisions(
+void ResolvePlayerHorizontalCollisions(
     Player& player,
     const Level& level,
     float deltaTime
@@ -263,7 +408,6 @@ void ResolveHorizontalCollisions(
             continue;
         }
 
-        // Moving right.
         if (player.velocity.x > 0.0f)
         {
             float previousRight =
@@ -279,7 +423,6 @@ void ResolveHorizontalCollisions(
                 player.velocity.x = 0.0f;
             }
         }
-        // Moving left.
         else if (player.velocity.x < 0.0f)
         {
             float tileRight =
@@ -316,7 +459,7 @@ void ResolveHorizontalCollisions(
     }
 }
 
-void ResolveVerticalCollisions(
+void ResolvePlayerVerticalCollisions(
     Player& player,
     const Level& level,
     float deltaTime
@@ -342,7 +485,6 @@ void ResolveVerticalCollisions(
             continue;
         }
 
-        // Falling: land on the top.
         if (player.velocity.y > 0.0f)
         {
             float previousBottom =
@@ -359,7 +501,6 @@ void ResolveVerticalCollisions(
                 player.onGround = true;
             }
         }
-        // Rising: hit the underside.
         else if (player.velocity.y < 0.0f)
         {
             float tileBottom =
@@ -375,10 +516,351 @@ void ResolveVerticalCollisions(
 }
 
 // --------------------------------------------------
+// Goomba movement and collision
+// --------------------------------------------------
+
+void ResolveGoombaHorizontalCollisions(
+    Goomba& goomba,
+    const Level& level,
+    float deltaTime
+)
+{
+    float previousX = goomba.body.x;
+
+    goomba.body.x +=
+        goomba.velocity.x * deltaTime;
+
+    std::vector<Rectangle> nearbyTiles =
+        GetNearbySolidTiles(
+            level,
+            goomba.body
+        );
+
+    for (const Rectangle& tile : nearbyTiles)
+    {
+        if (!CheckCollisionRecs(goomba.body, tile))
+        {
+            continue;
+        }
+
+        if (goomba.velocity.x > 0.0f)
+        {
+            float previousRight =
+                previousX +
+                goomba.body.width;
+
+            if (previousRight <= tile.x)
+            {
+                goomba.body.x =
+                    tile.x -
+                    goomba.body.width;
+
+                goomba.velocity.x =
+                    -std::abs(goomba.velocity.x);
+
+                return;
+            }
+        }
+        else if (goomba.velocity.x < 0.0f)
+        {
+            float tileRight =
+                tile.x + tile.width;
+
+            if (previousX >= tileRight)
+            {
+                goomba.body.x = tileRight;
+
+                goomba.velocity.x =
+                    std::abs(goomba.velocity.x);
+
+                return;
+            }
+        }
+    }
+
+    float levelWidth =
+        GetLevelWidth(level);
+
+    if (goomba.body.x < 0.0f)
+    {
+        goomba.body.x = 0.0f;
+        goomba.velocity.x =
+            std::abs(goomba.velocity.x);
+    }
+
+    if (
+        goomba.body.x +
+            goomba.body.width >
+        levelWidth
+    )
+    {
+        goomba.body.x =
+            levelWidth -
+            goomba.body.width;
+
+        goomba.velocity.x =
+            -std::abs(goomba.velocity.x);
+    }
+}
+
+void ResolveGoombaVerticalCollisions(
+    Goomba& goomba,
+    const Level& level,
+    float deltaTime
+)
+{
+    float previousY = goomba.body.y;
+
+    goomba.body.y +=
+        goomba.velocity.y * deltaTime;
+
+    goomba.onGround = false;
+
+    std::vector<Rectangle> nearbyTiles =
+        GetNearbySolidTiles(
+            level,
+            goomba.body
+        );
+
+    for (const Rectangle& tile : nearbyTiles)
+    {
+        if (!CheckCollisionRecs(goomba.body, tile))
+        {
+            continue;
+        }
+
+        if (goomba.velocity.y > 0.0f)
+        {
+            float previousBottom =
+                previousY +
+                goomba.body.height;
+
+            if (previousBottom <= tile.y)
+            {
+                goomba.body.y =
+                    tile.y -
+                    goomba.body.height;
+
+                goomba.velocity.y = 0.0f;
+                goomba.onGround = true;
+            }
+        }
+        else if (goomba.velocity.y < 0.0f)
+        {
+            float tileBottom =
+                tile.y + tile.height;
+
+            if (previousY >= tileBottom)
+            {
+                goomba.body.y = tileBottom;
+                goomba.velocity.y = 0.0f;
+            }
+        }
+    }
+}
+
+void UpdateGoombas(
+    std::vector<Goomba>& goombas,
+    const Level& level,
+    float deltaTime,
+    float gravity
+)
+{
+    for (Goomba& goomba : goombas)
+    {
+        if (
+			!goomba.alive ||
+			!goomba.spawned
+		)
+		{
+			continue;
+		}
+
+        goomba.velocity.y +=
+            gravity * deltaTime;
+
+        ResolveGoombaHorizontalCollisions(
+            goomba,
+            level,
+            deltaTime
+        );
+
+        ResolveGoombaVerticalCollisions(
+            goomba,
+            level,
+            deltaTime
+        );
+
+        if (
+            goomba.body.y >
+            GetLevelHeight(level) + 200.0f
+        )
+        {
+            goomba.alive = false;
+        }
+    }
+}
+
+void SpawnGoombasNearCamera(
+    std::vector<Goomba>& goombas,
+    const Camera2D& camera
+)
+{
+    constexpr float spawnMargin = 96.0f;
+
+    float halfVisibleWidth =
+        virtualWidth / (2.0f * camera.zoom);
+
+    float cameraRight =
+        camera.target.x + halfVisibleWidth;
+
+    for (Goomba& goomba : goombas)
+    {
+        if (
+            goomba.spawned ||
+            !goomba.alive
+        )
+        {
+            continue;
+        }
+
+        // Spawn shortly before entering the screen.
+        if (goomba.body.x <= cameraRight + spawnMargin)
+        {
+            goomba.spawned = true;
+        }
+    }
+}
+
+// --------------------------------------------------
+// Player/Goomba interaction
+// --------------------------------------------------
+
+bool HandlePlayerGoombaCollisions(
+    Player& player,
+    std::vector<Goomba>& goombas,
+    float previousPlayerBottom
+)
+{
+    constexpr float stompTolerance = 12.0f;
+    constexpr float stompBounceSpeed = 450.0f;
+
+    for (Goomba& goomba : goombas)
+    {
+        if (
+			!goomba.alive ||
+			!goomba.spawned ||
+			!CheckCollisionRecs(
+				player.body,
+				goomba.body
+			)
+		)
+        {
+            continue;
+        }
+
+        bool falling =
+            player.velocity.y > 0.0f;
+
+        bool wasAboveGoomba =
+            previousPlayerBottom <=
+            goomba.body.y +
+                stompTolerance;
+
+        if (falling && wasAboveGoomba)
+        {
+            goomba.alive = false;
+
+            player.body.y =
+                goomba.body.y -
+                player.body.height;
+
+            player.velocity.y =
+                -stompBounceSpeed;
+
+            player.onGround = false;
+
+            return false;
+        }
+
+        // The player touched the Goomba from the
+        // side or underneath.
+        return true;
+    }
+
+    return false;
+}
+
+// --------------------------------------------------
 // Drawing
 // --------------------------------------------------
 
-void DrawLevel(const Level& level)
+Rectangle GetFirstSquareFrame(const Texture2D& texture)
+{
+    // Handles both:
+    // - a single square image
+    // - a horizontal sprite sheet containing square frames
+    float frameSize = static_cast<float>(
+        std::min(texture.width, texture.height)
+    );
+
+    return {
+        0.0f,
+        0.0f,
+        frameSize,
+        frameSize
+    };
+}
+
+void DrawTextureInsideRectangle(
+    const Texture2D& texture,
+    Rectangle source,
+    const Rectangle& destination,
+    bool flipHorizontally = false
+)
+{
+    if (flipHorizontally)
+    {
+        source.x += source.width;
+        source.width = -source.width;
+    }
+
+    DrawTexturePro(
+        texture,
+        source,
+        destination,
+        {0.0f, 0.0f},
+        0.0f,
+        WHITE
+    );
+}
+
+void DrawTextureAsTile(
+    const Texture2D& texture,
+    const Rectangle& destination
+)
+{
+    Rectangle source{
+        0.0f,
+        0.0f,
+        static_cast<float>(texture.width),
+        static_cast<float>(texture.height)
+    };
+
+    DrawTexturePro(
+        texture,
+        source,
+        destination,
+        {0.0f, 0.0f},
+        0.0f,
+        WHITE
+    );
+}
+
+void DrawLevel(
+    const Level& level,
+    const GameTextures& textures
+)
 {
     for (int row = 0; row < GetLevelRows(level); ++row)
     {
@@ -388,29 +870,179 @@ void DrawLevel(const Level& level)
             ++column
         )
         {
-            if (!IsSolidTile(level, row, column))
+            char tile = level[row][column];
+
+            Rectangle destination =
+                GetTileRectangle(row, column);
+
+            switch (tile)
             {
-                continue;
+                case '#':
+                    DrawTextureAsTile(
+                        textures.ground,
+                        destination
+                    );
+                    break;
+
+                case 'B':
+                    DrawTextureAsTile(
+                        textures.brick,
+                        destination
+                    );
+                    break;
+
+                case 'Q':
+                    DrawTextureAsTile(
+                        textures.questionBlock,
+                        destination
+                    );
+                    break;
+
+                case 'S':
+                    DrawTextureAsTile(
+                        textures.stairBlock,
+                        destination
+                    );
+                    break;
+
+                case 'H':
+                {
+                    // Draw the complete pipe once from
+                    // its top-left marker.
+                    Rectangle pipeDestination{
+                        destination.x,
+                        destination.y,
+                        tileSize * 2.0f,
+                        tileSize * 2.0f
+                    };
+
+                    DrawTextureAsTile(
+                        textures.pipe,
+                        pipeDestination
+                    );
+
+                    break;
+                }
+
+                // These form the remaining solid pipe
+                // collision cells. The image is drawn by H.
+                case 'h':
+                case 'V':
+                case 'v':
+                    break;
+
+                default:
+                    break;
             }
-
-            Rectangle tile =
-                GetTileRectangle(
-                    row,
-                    column
-                );
-
-            DrawRectangleRec(
-                tile,
-                DARKBROWN
-            );
-
-            DrawRectangleLinesEx(
-                tile,
-                2.0f,
-                BLACK
-            );
         }
     }
+}
+
+void DrawPlayer(
+    const Player& player,
+    const Texture2D& texture
+)
+{
+    Rectangle source{
+        0.0f,
+        0.0f,
+        12.0f,
+        16.0f
+    };
+
+    constexpr float spriteHeight = 48.0f;
+
+    constexpr float spriteWidth =
+        spriteHeight * (12.0f / 16.0f);
+
+    Rectangle destination{
+        player.body.x +
+            (player.body.width - spriteWidth) / 2.0f,
+
+        player.body.y +
+            player.body.height -
+            spriteHeight,
+
+        spriteWidth,
+        spriteHeight
+    };
+
+    bool facingLeft =
+        player.velocity.x < -1.0f;
+
+    DrawTextureInsideRectangle(
+        texture,
+        source,
+        destination,
+        facingLeft
+    );
+}
+
+void DrawCoins(
+    const std::vector<Coin>& coins,
+    const Texture2D& texture
+)
+{
+    Rectangle source{
+        0.0f,
+        0.0f,
+        static_cast<float>(texture.width),
+        static_cast<float>(texture.height)
+    };
+
+    for (const Coin& coin : coins)
+    {
+        if (coin.collected)
+        {
+            continue;
+        }
+
+        DrawTexturePro(
+            texture,
+            source,
+            coin.body,
+            {0.0f, 0.0f},
+            0.0f,
+            WHITE
+        );
+    }
+}
+
+void DrawGoomba(
+    const Goomba& goomba,
+    const Texture2D& texture
+)
+{
+    if (
+        !goomba.alive ||
+        !goomba.spawned
+    )
+    {
+        return;
+    }
+
+    Rectangle source =
+        GetFirstSquareFrame(texture);
+
+    Rectangle destination{
+        goomba.body.x - 4.0f,
+        goomba.body.y +
+            goomba.body.height -
+            static_cast<float>(tileSize),
+
+        static_cast<float>(tileSize),
+        static_cast<float>(tileSize)
+    };
+
+    bool movingRight =
+        goomba.velocity.x > 0.0f;
+
+    DrawTextureInsideRectangle(
+        texture,
+        source,
+        destination,
+        movingRight
+    );
 }
 
 // --------------------------------------------------
@@ -432,21 +1064,17 @@ void UpdateCamera(
     const float halfVisibleWidth =
         visibleWorldWidth / 2.0f;
 
-    // Keep the player around the horizontal centre
-    // once the camera begins scrolling.
     float desiredTargetX =
         player.body.x +
         player.body.width / 2.0f;
 
-    // Prevent showing space outside the left or right
-    // edges of the level.
     desiredTargetX = std::clamp(
         desiredTargetX,
         halfVisibleWidth,
         levelWidth - halfVisibleWidth
     );
 
-    // The camera is only allowed to move right.
+    // Camera may only move to the right.
     desiredTargetX = std::max(
         desiredTargetX,
         camera.target.x
@@ -454,13 +1082,6 @@ void UpdateCamera(
 
     camera.target.x = desiredTargetX;
 
-    // Never move vertically.
-    //
-    // target.y = virtualHeight / 2 means:
-    // top of view    = 0
-    // bottom of view = 648
-    //
-    // 648 / 48 = 13.5 tiles.
     camera.target.y =
         virtualHeight / 2.0f;
 
@@ -471,7 +1092,7 @@ void UpdateCamera(
 }
 
 // --------------------------------------------------
-// Scale virtual resolution to real window
+// Virtual resolution scaling
 // --------------------------------------------------
 
 void DrawRenderTextureToWindow(
@@ -535,6 +1156,47 @@ void DrawRenderTextureToWindow(
 }
 
 // --------------------------------------------------
+// Respawn helper
+// --------------------------------------------------
+
+void RespawnPlayer(
+    Player& player,
+    const Vector2& spawn,
+    Camera2D& camera,
+    std::vector<Coin>& coins,
+    const std::vector<Coin>& initialCoins,
+    int& coinCount,
+    std::vector<Goomba>& goombas,
+    const std::vector<Goomba>& initialGoombas,
+    float& jumpBufferTimer,
+    float& coyoteTimer
+)
+{
+    player.body = {
+        spawn.x + 8.0f,
+        spawn.y + 4.0f,
+        32.0f,
+        44.0f
+    };
+
+    player.velocity = {0.0f, 0.0f};
+    player.onGround = false;
+
+    jumpBufferTimer = 0.0f;
+    coyoteTimer = 0.0f;
+
+    camera.target = {
+        virtualWidth / 2.0f,
+        virtualHeight / 2.0f
+    };
+
+    coins = initialCoins;
+    coinCount = 0;
+
+    goombas = initialGoombas;
+}
+
+// --------------------------------------------------
 // Main
 // --------------------------------------------------
 
@@ -555,21 +1217,21 @@ int main()
 
     Level level{
         "........................................................................................................................",
-        ".....#####..............................................................................................................",
-        "........................####......................................................#####...................................",
-        "..............................................#####.....................................................................",
-        "...###..............................###.....................................###...........................................",
-        "..............####........................................####...........................................................",
-        ".................................................................#####..................................................",
-        ".........####....................#####.................................................####..............................",
-        "............................###............................###............................................................",
-        "........................................#####....................................................#####..................",
-        ".P..................###...............................................###................................................",
         "........................................................................................................................",
-        "######..###################..#####################..############..#######################..####################..########",
-        "######..###################..#####################..############..#######################..####################..########",
-        "######..###################..#####################..############..#######################..####################..########",
-        "######..###################..#####################..############..#######################..####################..########"
+        "........................................................................................................................",
+        ".................................................C.C.C..................................................................",
+        "....................BBBBQBBBB.......................................................C....................................",
+        "..........................................C.C.C.................................................BBBB.....................",
+        ".........Q...B...Q......................................................................................................",
+        "..............................................................C.C.C.....................................................",
+        "............................BBBBB..................................................QBBBBQ.................................",
+        "........................................................................................................................",
+        ".P.........C.C.C....................Hh.........................G......................................Hh................",
+        "........BBBBQBBBB...................Vv...............................................SSS..............Vv....G...........",
+        "##################..############################..##############################....SSSS..........#######################",
+        "##################..############################..##############################...SSSSS..........#######################",
+        "##################..############################..##############################...SSSSS..........#######################",
+        "##################..############################..##############################...SSSSS..........#######################"
     };
 
     NormaliseLevel(level);
@@ -601,6 +1263,76 @@ int main()
     SetWindowMinSize(640, 360);
     SetTargetFPS(60);
 
+    GameTextures textures{
+        LoadTexture("resources/Blocks/Ground.png"),
+        LoadTexture("resources/Blocks/Brick.png"),
+        LoadTexture("resources/Blocks/Q_Block.png"),
+        LoadTexture("resources/Blocks/Stair_Block.png"),
+        LoadTexture("resources/Pipe.png"),
+        LoadTexture("resources/Coin.png"),
+        LoadTexture("resources/Mario/Small_Mario.png"),
+        LoadTexture("resources/Enemies/Goomba.png")
+    };
+
+    SetTextureFilter(
+        textures.ground,
+        TEXTURE_FILTER_POINT
+    );
+
+    SetTextureFilter(
+        textures.brick,
+        TEXTURE_FILTER_POINT
+    );
+
+    SetTextureFilter(
+        textures.questionBlock,
+        TEXTURE_FILTER_POINT
+    );
+
+    SetTextureFilter(
+        textures.stairBlock,
+        TEXTURE_FILTER_POINT
+    );
+
+    SetTextureFilter(
+        textures.pipe,
+        TEXTURE_FILTER_POINT
+    );
+
+    SetTextureFilter(
+        textures.coin,
+        TEXTURE_FILTER_POINT
+    );
+
+    SetTextureFilter(
+        textures.player,
+        TEXTURE_FILTER_POINT
+    );
+
+    SetTextureFilter(
+        textures.goomba,
+        TEXTURE_FILTER_POINT
+    );
+
+    if (
+        textures.ground.id == 0 ||
+        textures.player.id == 0 ||
+        textures.goomba.id == 0
+    )
+    {
+        TraceLog(
+            LOG_ERROR,
+            "Failed to load one or more game textures."
+        );
+
+        UnloadTexture(textures.ground);
+        UnloadTexture(textures.player);
+        UnloadTexture(textures.goomba);
+
+        CloseWindow();
+        return 1;
+    }
+
     RenderTexture2D gameTexture =
         LoadRenderTexture(
             virtualWidth,
@@ -617,21 +1349,35 @@ int main()
 
     Player player{
         {
-            spawn.x + 4.0f,
-            spawn.y - 2.0f,
-            40.0f,
-            50.0f
+            spawn.x + 8.0f,
+            spawn.y + 4.0f,
+            32.0f,
+            44.0f
         },
         {0.0f, 0.0f},
         false
     };
 
+    std::vector<Coin> initialCoins =
+        FindCoinSpawns(level);
+
+    std::vector<Coin> coins =
+        initialCoins;
+
+    int coinCount = 0;
+
+    std::vector<Goomba> initialGoombas =
+        FindGoombaSpawns(level);
+
+    std::vector<Goomba> goombas =
+        initialGoombas;
+
     Camera2D camera{};
 
     camera.target = {
-		virtualWidth / 2.0f,
-		virtualHeight / 2.0f
-	};
+        virtualWidth / 2.0f,
+        virtualHeight / 2.0f
+    };
 
     camera.offset = {
         virtualWidth / 2.0f,
@@ -647,15 +1393,17 @@ int main()
     while (!WindowShouldClose())
     {
         float deltaTime =
-            GetFrameTime();
-
-        deltaTime = std::min(
-            deltaTime,
-            0.05f
-        );
+            std::min(
+                GetFrameTime(),
+                0.05f
+            );
 
         bool wasOnGround =
             player.onGround;
+
+        float previousPlayerBottom =
+            player.body.y +
+            player.body.height;
 
         // --------------------------------
         // Input
@@ -694,7 +1442,7 @@ int main()
                 : walkingAcceleration;
 
         // --------------------------------
-        // Jump buffering
+        // Jump buffer
         // --------------------------------
 
         if (
@@ -776,8 +1524,6 @@ int main()
             }
         }
 
-        // Reduce sprint speed gradually when
-        // the sprint button is released.
         if (!sprinting)
         {
             if (player.velocity.x > walkSpeed)
@@ -823,26 +1569,32 @@ int main()
             coyoteTimer = 0.0f;
         }
 
+        // Collect Coins
+
+        coinCount += CollectCoins(
+            player,
+            coins
+        );
+
         // --------------------------------
-        // Physics
+        // Player physics
         // --------------------------------
 
         player.velocity.y +=
             gravity * deltaTime;
 
-        ResolveHorizontalCollisions(
+        ResolvePlayerHorizontalCollisions(
             player,
             level,
             deltaTime
         );
 
-        ResolveVerticalCollisions(
+        ResolvePlayerVerticalCollisions(
             player,
             level,
             deltaTime
         );
 
-        // Buffered jump immediately after landing.
         if (
             player.onGround &&
             jumpBufferTimer > 0.0f
@@ -858,34 +1610,51 @@ int main()
         }
 
         // --------------------------------
+        // Enemy physics
+        // --------------------------------
+
+		SpawnGoombasNearCamera(
+			goombas,
+			camera
+		);
+		
+        UpdateGoombas(
+            goombas,
+            level,
+            deltaTime,
+            gravity
+        );
+
+        bool playerHitGoomba =
+            HandlePlayerGoombaCollisions(
+                player,
+                goombas,
+                previousPlayerBottom
+            );
+
+        // --------------------------------
         // Respawn
         // --------------------------------
 
-        if (
+        bool playerFell =
             player.body.y >
             GetLevelHeight(level) +
-                200.0f
-        )
+                200.0f;
+
+        if (playerFell || playerHitGoomba)
         {
-            player.body = {
-                spawn.x + 4.0f,
-                spawn.y - 2.0f,
-                40.0f,
-                50.0f
-            };
-
-            player.velocity =
-                {0.0f, 0.0f};
-
-            player.onGround = false;
-
-            jumpBufferTimer = 0.0f;
-            coyoteTimer = 0.0f;
-
-            camera.target = {
-				virtualWidth / 2.0f,
-				virtualHeight / 2.0f
-			};
+            RespawnPlayer(
+                player,
+                spawn,
+                camera,
+                coins,
+                initialCoins,
+                coinCount,
+                goombas,
+                initialGoombas,
+                jumpBufferTimer,
+                coyoteTimer
+            );
         }
 
         // --------------------------------
@@ -898,19 +1667,34 @@ int main()
             level
         );
 
-		float cameraLeft =
-			camera.target.x -
-			virtualWidth / (2.0f * camera.zoom)
-			+ 5.0f;
+        float cameraLeft =
+            camera.target.x -
+            virtualWidth /
+                (2.0f * camera.zoom) +
+            5.0f;
 
-		if (player.body.x < cameraLeft)
-		{
-			player.body.x = cameraLeft;
-			player.velocity.x = 0.0f;
-		}
+        if (player.body.x < cameraLeft)
+        {
+            player.body.x = cameraLeft;
+            player.velocity.x = 0.0f;
+        }
+
+        // Remove enemies left behind by the camera.
+        for (Goomba& goomba : goombas)
+        {
+            if (
+                goomba.alive &&
+                goomba.body.x +
+                    goomba.body.width <
+                cameraLeft
+            )
+            {
+                goomba.alive = false;
+            }
+        }
 
         // --------------------------------
-        // Draw to virtual resolution
+        // Draw virtual game screen
         // --------------------------------
 
         BeginTextureMode(gameTexture);
@@ -919,18 +1703,49 @@ int main()
 
         BeginMode2D(camera);
 
-        DrawLevel(level);
-
-        DrawRectangleRec(
-            player.body,
-            RED
+        DrawLevel(
+            level,
+            textures
         );
 
-        DrawRectangleLinesEx(
-            player.body,
-            2.0f,
-            BLACK
+        DrawCoins(
+            coins,
+            textures.coin
         );
+
+        for (const Goomba& goomba : goombas)
+        {
+            DrawGoomba(
+                goomba,
+                textures.goomba
+            );
+        }
+
+        DrawPlayer(
+            player,
+            textures.player
+        );
+
+        if (IsKeyDown(KEY_F1))
+        {
+            DrawRectangleLinesEx(
+                player.body,
+                2.0f,
+                RED
+            );
+
+            for (const Goomba& goomba : goombas)
+            {
+                if (goomba.alive && goomba.spawned)
+                {
+                    DrawRectangleLinesEx(
+                        goomba.body,
+                        2.0f,
+                        RED
+                    );
+                }
+            }
+        }
 
         EndMode2D();
 
@@ -968,9 +1783,28 @@ int main()
 
         DrawText(
             TextFormat(
-                "Position: %.0f, %.0f",
-                player.body.x,
-                player.body.y
+                "Coins: %d",
+                coinCount
+            ),
+            20,
+            100,
+            18,
+            BLACK
+        );
+
+        DrawText(
+            TextFormat(
+                "Goombas remaining: %d",
+                static_cast<int>(
+                    std::count_if(
+                        goombas.begin(),
+                        goombas.end(),
+                        [](const Goomba& goomba)
+                        {
+                            return goomba.alive;
+                        }
+                    )
+                )
             ),
             20,
             100,
@@ -981,7 +1815,7 @@ int main()
         EndTextureMode();
 
         // --------------------------------
-        // Scale virtual resolution
+        // Scale virtual screen to window
         // --------------------------------
 
         BeginDrawing();
@@ -994,6 +1828,15 @@ int main()
 
         EndDrawing();
     }
+
+    UnloadTexture(textures.ground);
+    UnloadTexture(textures.brick);
+    UnloadTexture(textures.questionBlock);
+    UnloadTexture(textures.stairBlock);
+    UnloadTexture(textures.pipe);
+    UnloadTexture(textures.coin);
+    UnloadTexture(textures.player);
+    UnloadTexture(textures.goomba);
 
     UnloadRenderTexture(gameTexture);
     CloseWindow();
