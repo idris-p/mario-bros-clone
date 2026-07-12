@@ -5,13 +5,27 @@
 #include <string>
 #include <vector>
 
+// For erase_if (C++20)
+namespace std {
+    template<typename Container, typename Predicate>
+    typename Container::size_type erase_if(Container& c, Predicate pred) {
+        auto it = std::remove_if(c.begin(), c.end(), pred);
+        auto count = std::distance(it, c.end());
+        c.erase(it, c.end());
+        return count;
+    }
+}
+
 struct Player
 {
     Rectangle body;
     Vector2 velocity;
     bool onGround;
     bool big;
+    bool fire;
     float invulnerabilityTimer;
+    bool sprinting;
+    bool facingLeft;
 };
 
 struct SuperMushroom
@@ -21,6 +35,21 @@ struct SuperMushroom
     float targetY;
     bool emerging;
     bool collected;
+};
+
+struct FireFlower
+{
+    Rectangle body;
+    float targetY;
+    bool emerging;
+    bool collected;
+};
+
+struct FireBall
+{
+    Rectangle body;
+    Vector2 velocity;
+    bool alive;
 };
 
 struct Goomba
@@ -55,6 +84,16 @@ struct BlockCoin
     float age;
 };
 
+struct BlockBump
+{
+    int row;
+    int column;
+    float age;
+    float offsetY;
+};
+
+std::vector<BlockBump> blockBumps;
+
 struct GameTextures
 {
     Texture2D ground;
@@ -67,10 +106,13 @@ struct GameTextures
     Texture2D coin;
     Texture2D player;
     Texture2D superMario;
+    Texture2D fireMario;
     Texture2D goomba;
     Texture2D koopa;
     Texture2D greenShell;
     Texture2D superMushroom;
+    Texture2D fireFlower;
+    Texture2D fireBall;
     Texture2D flag;
 };
 
@@ -176,6 +218,7 @@ bool IsSolidTile(
         tile == 'B' ||
         tile == 'Q' ||
         tile == 'M' ||
+        tile == 'A' ||
         tile == 'E' ||
         tile == 'S' ||
         tile == 'H' ||
@@ -189,12 +232,64 @@ Rectangle GetTileRectangle(
     int column
 )
 {
+    float offsetY = 0.0f;
+
+    for (const BlockBump& bump : blockBumps)
+    {
+        if (bump.row == row && bump.column == column)
+        {
+            offsetY = bump.offsetY;
+            break;
+        }
+    }
+
     return {
         static_cast<float>(column * tileSize),
-        static_cast<float>(row * tileSize),
+        static_cast<float>(row * tileSize) + offsetY,
         static_cast<float>(tileSize),
         static_cast<float>(tileSize)
     };
+}
+
+void StartBlockBump(int row, int column)
+{
+    for (const BlockBump& bump : blockBumps)
+    {
+        if (bump.row == row && bump.column == column)
+        {
+            return;
+        }
+    }
+
+    blockBumps.push_back({row, column, 0.0f, 0.0f});
+}
+
+void UpdateBlockBumps(float deltaTime)
+{
+    constexpr float bumpDuration = 0.22f;
+    constexpr float bumpHeight = 10.0f;
+
+    for (BlockBump& bump : blockBumps)
+    {
+        bump.age += deltaTime;
+
+        float progress = std::clamp(
+            bump.age / bumpDuration,
+            0.0f,
+            1.0f
+        );
+
+        bump.offsetY =
+            -std::sin(progress * PI) * bumpHeight;
+    }
+
+    std::erase_if(
+        blockBumps,
+        [bumpDuration](const BlockBump& bump)
+        {
+            return bump.age >= bumpDuration;
+        }
+    );
 }
 
 Vector2 FindPlayerSpawn(const Level& level)
@@ -527,6 +622,180 @@ void CollectSuperMushrooms(
     }
 }
 
+void UpdateFireFlowers(
+    std::vector<FireFlower>& flowers,
+    float deltaTime
+)
+{
+    constexpr float emergeSpeed = 48.0f;
+
+    for (FireFlower& flower : flowers)
+    {
+        if (flower.collected || !flower.emerging)
+        {
+            continue;
+        }
+
+        flower.body.y = std::max(
+            flower.targetY,
+            flower.body.y - emergeSpeed * deltaTime
+        );
+
+        if (flower.body.y <= flower.targetY)
+        {
+            flower.emerging = false;
+        }
+    }
+}
+
+void CollectFireFlowers(
+    Player& player,
+    std::vector<FireFlower>& flowers
+)
+{
+    for (FireFlower& flower : flowers)
+    {
+        if (
+            flower.collected ||
+            flower.emerging ||
+            !CheckCollisionRecs(player.body, flower.body)
+        )
+        {
+            continue;
+        }
+
+        flower.collected = true;
+        player.big = true;
+        player.fire = true;
+    }
+}
+
+void UpdateFireBalls(
+    std::vector<FireBall>& fireBalls,
+    const Level& level,
+    std::vector<Goomba>& goombas,
+    std::vector<Koopa>& koopas,
+    const Camera2D& camera,
+    float deltaTime
+)
+{
+    constexpr float fireBallGravity = 1500.0f;
+    constexpr float bounceSpeed = 330.0f;
+
+    for (FireBall& fireBall : fireBalls)
+    {
+        if (!fireBall.alive)
+        {
+            continue;
+        }
+
+        float previousX = fireBall.body.x;
+        fireBall.body.x += fireBall.velocity.x * deltaTime;
+
+        for (const Rectangle& tile : GetNearbySolidTiles(level, fireBall.body))
+        {
+            if (!CheckCollisionRecs(fireBall.body, tile))
+            {
+                continue;
+            }
+
+            bool hitFromSide =
+                (fireBall.velocity.x > 0.0f &&
+                    previousX + fireBall.body.width <= tile.x) ||
+                (fireBall.velocity.x < 0.0f &&
+                    previousX >= tile.x + tile.width);
+
+            if (hitFromSide)
+            {
+                fireBall.alive = false;
+                break;
+            }
+        }
+
+        if (!fireBall.alive)
+        {
+            continue;
+        }
+
+        float previousY = fireBall.body.y;
+        fireBall.velocity.y += fireBallGravity * deltaTime;
+        fireBall.body.y += fireBall.velocity.y * deltaTime;
+
+        for (const Rectangle& tile : GetNearbySolidTiles(level, fireBall.body))
+        {
+            if (
+                CheckCollisionRecs(fireBall.body, tile) &&
+                fireBall.velocity.y > 0.0f &&
+                previousY + fireBall.body.height <= tile.y
+            )
+            {
+                fireBall.body.y = tile.y - fireBall.body.height;
+                fireBall.velocity.y = -bounceSpeed;
+                break;
+            }
+        }
+
+        for (Goomba& goomba : goombas)
+        {
+            if (
+                goomba.alive &&
+                goomba.spawned &&
+                CheckCollisionRecs(fireBall.body, goomba.body)
+            )
+            {
+                goomba.alive = false;
+                fireBall.alive = false;
+                break;
+            }
+        }
+
+        for (Koopa& koopa : koopas)
+        {
+            if (
+                fireBall.alive &&
+                koopa.alive &&
+                koopa.spawned &&
+                CheckCollisionRecs(fireBall.body, koopa.body)
+            )
+            {
+                koopa.alive = false;
+                fireBall.alive = false;
+                break;
+            }
+        }
+
+        float halfVisibleWidth =
+            virtualWidth / (2.0f * camera.zoom);
+
+        float halfVisibleHeight =
+            virtualHeight / (2.0f * camera.zoom);
+
+        float cameraLeft = camera.target.x - halfVisibleWidth;
+        float cameraRight = camera.target.x + halfVisibleWidth;
+        float cameraTop = camera.target.y - halfVisibleHeight;
+        float cameraBottom = camera.target.y + halfVisibleHeight;
+
+        bool outsideCamera =
+            fireBall.body.x + fireBall.body.width < cameraLeft ||
+            fireBall.body.x > cameraRight ||
+            fireBall.body.y + fireBall.body.height < cameraTop ||
+            fireBall.body.y > cameraBottom;
+
+        if (outsideCamera)
+        {
+            fireBall.alive = false;
+        }
+    }
+
+    std::erase_if(
+        fireBalls,
+        [](const FireBall& fireBall)
+        {
+            return !fireBall.alive;
+        }
+    );
+}
+
 // --------------------------------------------------
 // Nearby tile lookup
 // --------------------------------------------------
@@ -684,10 +953,77 @@ void ResolvePlayerHorizontalCollisions(
     }
 }
 
+bool IsEntityStandingOnBlock(
+    const Rectangle& entity,
+    const Rectangle& block
+)
+{
+    constexpr float footTolerance = 4.0f;
+
+    bool horizontallyOverlapping =
+        entity.x + entity.width > block.x &&
+        entity.x < block.x + block.width;
+
+    float entityBottom = entity.y + entity.height;
+
+    return
+        horizontallyOverlapping &&
+        std::abs(entityBottom - block.y) <= footTolerance;
+}
+
+void HitEntitiesAboveBlock(
+    const Rectangle& block,
+    std::vector<SuperMushroom>& mushrooms,
+    std::vector<Goomba>& goombas,
+    std::vector<Koopa>& koopas
+)
+{
+    constexpr float mushroomBounceSpeed = 500.0f;
+
+    for (SuperMushroom& mushroom : mushrooms)
+    {
+        if (
+            !mushroom.collected &&
+            !mushroom.emerging &&
+            IsEntityStandingOnBlock(mushroom.body, block)
+        )
+        {
+            mushroom.velocity.y = -mushroomBounceSpeed;
+        }
+    }
+
+    for (Goomba& goomba : goombas)
+    {
+        if (
+            goomba.alive &&
+            goomba.spawned &&
+            IsEntityStandingOnBlock(goomba.body, block)
+        )
+        {
+            goomba.alive = false;
+        }
+    }
+
+    for (Koopa& koopa : koopas)
+    {
+        if (
+            koopa.alive &&
+            koopa.spawned &&
+            IsEntityStandingOnBlock(koopa.body, block)
+        )
+        {
+            koopa.alive = false;
+        }
+    }
+}
+
 void ResolvePlayerVerticalCollisions(
     Player& player,
     Level& level,
     std::vector<SuperMushroom>& mushrooms,
+    std::vector<FireFlower>& fireFlowers,
+    std::vector<Goomba>& goombas,
+    std::vector<Koopa>& koopas,
     std::vector<BlockCoin>& blockCoins,
     int& coinCount,
     float deltaTime
@@ -705,6 +1041,44 @@ void ResolvePlayerVerticalCollisions(
             level,
             player.body
         );
+
+    Rectangle closestCeilingTile{};
+    bool hasClosestCeilingTile = false;
+
+    if (player.velocity.y < 0.0f)
+    {
+        float playerCentreX =
+            player.body.x + player.body.width / 2.0f;
+
+        float closestDistance = 0.0f;
+
+        for (const Rectangle& tile : nearbyTiles)
+        {
+            if (
+                !CheckCollisionRecs(player.body, tile) ||
+                previousY < tile.y + tile.height
+            )
+            {
+                continue;
+            }
+
+            float tileCentreX =
+                tile.x + tile.width / 2.0f;
+
+            float distance =
+                std::abs(playerCentreX - tileCentreX);
+
+            if (
+                !hasClosestCeilingTile ||
+                distance < closestDistance
+            )
+            {
+                closestCeilingTile = tile;
+                closestDistance = distance;
+                hasClosestCeilingTile = true;
+            }
+        }
+    }
 
     for (const Rectangle& tile : nearbyTiles)
     {
@@ -731,6 +1105,17 @@ void ResolvePlayerVerticalCollisions(
         }
         else if (player.velocity.y < 0.0f)
         {
+            if (
+                hasClosestCeilingTile &&
+                (
+                    tile.x != closestCeilingTile.x ||
+                    tile.y != closestCeilingTile.y
+                )
+            )
+            {
+                continue;
+            }
+
             float tileBottom =
                 tile.y + tile.height;
 
@@ -740,29 +1125,52 @@ void ResolvePlayerVerticalCollisions(
                 player.velocity.y = 0.0f;
 
                 int tileColumn =
-                    static_cast<int>(tile.x / tileSize);
+                    static_cast<int>(std::lround(tile.x / tileSize));
 
                 int tileRow =
-                    static_cast<int>(tile.y / tileSize);
+                    static_cast<int>(std::lround(tile.y / tileSize));
 
                 char& hitTile =
                     level[tileRow][tileColumn];
+
+                if (
+                    hitTile == 'B' ||
+                    hitTile == 'M' ||
+                    hitTile == 'A' ||
+                    hitTile == 'Q'
+                )
+                {
+                    HitEntitiesAboveBlock(
+                        tile,
+                        mushrooms,
+                        goombas,
+                        koopas
+                    );
+                }
 
                 if (hitTile == 'B' && player.big)
                 {
                     hitTile = '.';
                 }
+                else if (hitTile == 'B')
+                {
+                    StartBlockBump(tileRow, tileColumn);
+                }
                 else if (hitTile == 'M')
                 {
                     hitTile = 'E';
+                    StartBlockBump(tileRow, tileColumn);
 
-                    constexpr float mushroomSize = 40.0f;
+                    constexpr float mushroomSize =
+                        static_cast<float>(tileSize);
+
+                    constexpr float blockBumpHeight = 10.0f;
 
                     mushrooms.push_back({
                         {
                             tile.x +
                                 (tileSize - mushroomSize) / 2.0f,
-                            tile.y,
+                            tile.y - blockBumpHeight,
                             mushroomSize,
                             mushroomSize
                         },
@@ -772,9 +1180,50 @@ void ResolvePlayerVerticalCollisions(
                         false
                     });
                 }
+                else if (hitTile == 'A')
+                {
+                    hitTile = 'E';
+                    StartBlockBump(tileRow, tileColumn);
+
+                    constexpr float itemSize =
+                        static_cast<float>(tileSize);
+
+                    constexpr float blockBumpHeight = 10.0f;
+
+                    if (player.big)
+                    {
+                        fireFlowers.push_back({
+                            {
+                                tile.x,
+                                tile.y - blockBumpHeight,
+                                itemSize,
+                                itemSize
+                            },
+                            tile.y - itemSize,
+                            true,
+                            false
+                        });
+                    }
+                    else
+                    {
+                        mushrooms.push_back({
+                            {
+                                tile.x,
+                                tile.y - blockBumpHeight,
+                                itemSize,
+                                itemSize
+                            },
+                            {0.0f, 0.0f},
+                            tile.y - itemSize,
+                            true,
+                            false
+                        });
+                    }
+                }
                 else if (hitTile == 'Q')
                 {
                     hitTile = 'E';
+                    StartBlockBump(tileRow, tileColumn);
                     ++coinCount;
 
                     constexpr float coinWidth = 24.0f;
@@ -1031,10 +1480,10 @@ void ResolveKoopaHorizontalCollisions(
         }
 
         int tileColumn =
-            static_cast<int>(tile.x / tileSize);
+            static_cast<int>(std::lround(tile.x / tileSize));
 
         int tileRow =
-            static_cast<int>(tile.y / tileSize);
+            static_cast<int>(std::lround(tile.y / tileSize));
 
         if (
             koopa.shelled &&
@@ -1536,6 +1985,7 @@ void DrawLevel(
 
                 case 'Q':
                 case 'M':
+                case 'A':
                     DrawTextureAsTile(
                         textures.questionBlock,
                         destination
@@ -1561,8 +2011,7 @@ void DrawLevel(
                     };
 
                     Rectangle flagDestination{
-                        destination.x + tileSize / 2.0f -
-                            10.5f * flagScale,
+                        destination.x - 8.0f * flagScale,
                         destination.y + tileSize * 2.0f -
                             textures.flag.height * flagScale,
                         textures.flag.width * flagScale,
@@ -1638,11 +2087,13 @@ void DrawLevel(
 void DrawPlayer(
     const Player& player,
     const Texture2D& smallTexture,
-    const Texture2D& bigTexture
+    const Texture2D& bigTexture,
+    const Texture2D& fireTexture
 )
 {
-    const Texture2D& texture =
-        player.big ? bigTexture : smallTexture;
+    const Texture2D& texture = player.fire
+        ? fireTexture
+        : (player.big ? bigTexture : smallTexture);
 
     Rectangle source = player.big
         ? Rectangle{0.0f, 0.0f, 16.0f, 32.0f}
@@ -1667,15 +2118,41 @@ void DrawPlayer(
         spriteHeight
     };
 
-    bool facingLeft =
-        player.velocity.x < -1.0f;
-
     DrawTextureInsideRectangle(
         texture,
         source,
         destination,
-        facingLeft
+        player.facingLeft
     );
+}
+
+void DrawFireFlowers(
+    const std::vector<FireFlower>& flowers,
+    const Texture2D& texture
+)
+{
+    Rectangle source{0.0f, 0.0f, 16.0f, 16.0f};
+
+    for (const FireFlower& flower : flowers)
+    {
+        if (!flower.collected)
+        {
+            DrawTextureInsideRectangle(texture, source, flower.body);
+        }
+    }
+}
+
+void DrawFireBalls(
+    const std::vector<FireBall>& fireBalls,
+    const Texture2D& texture
+)
+{
+    Rectangle source{0.0f, 0.0f, 8.0f, 8.0f};
+
+    for (const FireBall& fireBall : fireBalls)
+    {
+        DrawTextureInsideRectangle(texture, source, fireBall.body);
+    }
 }
 
 void DrawSuperMushrooms(
@@ -1967,6 +2444,8 @@ void RespawnPlayer(
     std::vector<Koopa>& koopas,
     const std::vector<Koopa>& initialKoopas,
     std::vector<SuperMushroom>& mushrooms,
+    std::vector<FireFlower>& fireFlowers,
+    std::vector<FireBall>& fireBalls,
     float& jumpBufferTimer,
     float& coyoteTimer
 )
@@ -1981,7 +2460,10 @@ void RespawnPlayer(
     player.velocity = {0.0f, 0.0f};
     player.onGround = false;
     player.big = false;
+    player.fire = false;
     player.invulnerabilityTimer = 0.0f;
+    player.sprinting = false;
+    player.facingLeft = false;
 
     jumpBufferTimer = 0.0f;
     coyoteTimer = 0.0f;
@@ -1998,6 +2480,9 @@ void RespawnPlayer(
     goombas = initialGoombas;
     koopas = initialKoopas;
     mushrooms.clear();
+    fireFlowers.clear();
+    fireBalls.clear();
+    blockBumps.clear();
 }
 
 // --------------------------------------------------
@@ -2028,22 +2513,22 @@ int main()
     constexpr float coyoteTimeDuration = 0.06f;
 
     Level level{
-        "..........................................................................................................................................................................................................",
-        "..........................................................................................................................................................................................................",
-        "..........................................................................................................................................................................................................",
-        "..................................................................................G.......................................................................................................................",
-        "......................Q.........................................................BBBBBBBB...BBBQ..............M...........BBB....BQQB........................................................SS............",
-        "...........................................................................................................................................................................................SSS............",
-        "...............................................................................G..........................................................................................................SSSS............",
-        ".........................................................................................................................................................................................SSSSS............",
-        "................Q...BMBQB.....................Hh.........Hh..................BMB..............C.....BB....Q..Q..Q.....B..........BB......S..S..........SS..S............BBQB............SSSSSS............",
-        "......................................Hh......Vv.........Vv.............................................................................SS..SS........SSS..SS..........................SSSSSSS............",
-        "............................Hh........Vv......Vv.........Vv............................................................................SSS..SSS......SSSS..SSS.....Hh..............Hh.SSSSSSSS........F...",
-        "...P.................G......Vv........Vv.G....Vv.....G.G.Vv....................................G.G........K.................GG.G.G....SSSS..SSSS....SSSSS..SSSS....Vv.........GG...VvSSSSSSSSS........S...",
-        "#####################################################################..###############...################################################################..###############################################",
-        "#####################################################################..###############...################################################################..###############################################",
-        "#####################################################################..###############...################################################################..###############################################",
-        "#####################################################################..###############...################################################################..###############################################"
+        "....................................................................................................................................................................................................................",
+        "....................................................................................................................................................................................................................",
+        "....................................................................................................................................................................................................................",
+        "..................................................................................G.................................................................................................................................",
+        "......................Q.........................................................BBBBBBBB...BBBQ..............M...........BBB....BQQB........................................................SS......................",
+        "...........................................................................................................................................................................................SSS......................",
+        "...............................................................................G..........................................................................................................SSSS......................",
+        ".........................................................................................................................................................................................SSSSS......................",
+        "................Q...BMBQB.....................Hh.........Hh..................BAB..............C.....BB....Q..Q..Q.....B..........BB......S..S..........SS..S............BBQB............SSSSSS......................",
+        "......................................Hh......Vv.........Vv.............................................................................SS..SS........SSS..SS..........................SSSSSSS......................",
+        "............................Hh........Vv......Vv.........Vv............................................................................SSS..SSS......SSSS..SSS.....Hh..............Hh.SSSSSSSS........F.............",
+        "...P.................G......Vv........Vv.G....Vv.....G.G.Vv....................................G.G........K.................GG.G.G....SSSS..SSSS....SSSSS..SSSS....Vv.........GG...VvSSSSSSSSS........S.............",
+        "#####################################################################..###############...################################################################..#########################################################",
+        "#####################################################################..###############...################################################################..#########################################################",
+        "#####################################################################..###############...################################################################..#########################################################",
+        "#####################################################################..###############...################################################################..#########################################################"
     };
 
     NormaliseLevel(level);
@@ -2086,10 +2571,13 @@ int main()
         LoadTexture("resources/Coin.png"),
         LoadTexture("resources/Mario/Small_Mario.png"),
         LoadTexture("resources/Mario/Super_Mario.png"),
+        LoadTexture("resources/Mario/Fire_Mario.png"),
         LoadTexture("resources/Enemies/Goomba.png"),
         LoadTexture("resources/Enemies/Green_Koopa.png"),
         LoadTexture("resources/Green_Shell.png"),
         LoadTexture("resources/Items/Super_Mushroom.png"),
+        LoadTexture("resources/Items/Fire_Flower.png"),
+        LoadTexture("resources/Fire_Ball.png"),
         LoadTexture("resources/Flag.png")
     };
 
@@ -2133,6 +2621,7 @@ int main()
     );
 
     SetTextureFilter(textures.superMario, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireMario, TEXTURE_FILTER_POINT);
 
     SetTextureFilter(
         textures.goomba,
@@ -2142,6 +2631,8 @@ int main()
     SetTextureFilter(textures.koopa, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.greenShell, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.superMushroom, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireFlower, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireBall, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.flag, TEXTURE_FILTER_POINT);
 
     if (
@@ -2150,10 +2641,13 @@ int main()
         textures.emptyBlock.id == 0 ||
         textures.player.id == 0 ||
         textures.superMario.id == 0 ||
+        textures.fireMario.id == 0 ||
         textures.goomba.id == 0 ||
         textures.koopa.id == 0 ||
         textures.greenShell.id == 0 ||
         textures.superMushroom.id == 0 ||
+        textures.fireFlower.id == 0 ||
+        textures.fireBall.id == 0 ||
         textures.flag.id == 0
     )
     {
@@ -2167,10 +2661,13 @@ int main()
         UnloadTexture(textures.emptyBlock);
         UnloadTexture(textures.player);
         UnloadTexture(textures.superMario);
+        UnloadTexture(textures.fireMario);
         UnloadTexture(textures.goomba);
         UnloadTexture(textures.koopa);
         UnloadTexture(textures.greenShell);
         UnloadTexture(textures.superMushroom);
+        UnloadTexture(textures.fireFlower);
+        UnloadTexture(textures.fireBall);
         UnloadTexture(textures.flag);
 
         CloseWindow();
@@ -2201,10 +2698,15 @@ int main()
         {0.0f, 0.0f},
         false,
         false,
-        0.0f
+        false,
+        0.0f,
+        false,
+        false
     };
 
     std::vector<SuperMushroom> mushrooms;
+    std::vector<FireFlower> fireFlowers;
+    std::vector<FireBall> fireBalls;
 
     std::vector<Coin> initialCoins =
         FindCoinSpawns(level);
@@ -2259,6 +2761,8 @@ int main()
             player.invulnerabilityTimer - deltaTime
         );
 
+        UpdateBlockBumps(deltaTime);
+
         bool wasOnGround =
             player.onGround;
 
@@ -2288,9 +2792,29 @@ int main()
             direction += 1.0f;
         }
 
-        bool sprinting =
+        if (direction < 0.0f)
+        {
+            player.facingLeft = true;
+        }
+        else if (direction > 0.0f)
+        {
+            player.facingLeft = false;
+        }
+
+        bool sprintKeyDown =
             IsKeyDown(KEY_LEFT_SHIFT) ||
             IsKeyDown(KEY_RIGHT_SHIFT);
+
+        if (!sprintKeyDown)
+        {
+            player.sprinting = false;
+        }
+        else if (wasOnGround)
+        {
+            player.sprinting = true;
+        }
+
+        bool sprinting = player.sprinting;
 
         float currentMaxSpeed =
             sprinting
@@ -2307,7 +2831,37 @@ int main()
         // --------------------------------
 
         if (
-            IsKeyPressed(KEY_SPACE) ||
+            player.fire &&
+            IsKeyPressed(KEY_SPACE) &&
+            fireBalls.size() < 2
+        )
+        {
+            constexpr float fireBallSize = 24.0f;
+            constexpr float fireBallSpeed = 480.0f;
+
+            bool shootLeft = player.facingLeft;
+
+            float fireBallX = shootLeft
+                ? player.body.x - fireBallSize
+                : player.body.x + player.body.width;
+
+            fireBalls.push_back({
+                {
+                    fireBallX,
+                    player.body.y + player.body.height * 0.35f,
+                    fireBallSize,
+                    fireBallSize
+                },
+                {
+                    shootLeft ? -fireBallSpeed : fireBallSpeed,
+                    0.0f
+                },
+                true
+            });
+        }
+
+        if (
+            (IsKeyPressed(KEY_SPACE) && !player.fire) ||
             IsKeyPressed(KEY_W)
         )
         {
@@ -2442,7 +2996,7 @@ int main()
         // --------------------------------
 
         bool jumpHeld =
-            IsKeyDown(KEY_SPACE) ||
+            (IsKeyDown(KEY_SPACE) && !player.fire) ||
             IsKeyDown(KEY_W);
 
         float playerGravity = fallingGravity;
@@ -2467,6 +3021,9 @@ int main()
             player,
             level,
             mushrooms,
+            fireFlowers,
+            goombas,
+            koopas,
             blockCoins,
             coinCount,
             deltaTime
@@ -2517,6 +3074,18 @@ int main()
 
         CollectSuperMushrooms(player, mushrooms);
 
+        UpdateFireFlowers(fireFlowers, deltaTime);
+        CollectFireFlowers(player, fireFlowers);
+
+        UpdateFireBalls(
+            fireBalls,
+            level,
+            goombas,
+            koopas,
+            camera,
+            deltaTime
+        );
+
         HandleStationaryShellEnemyCollisions(
             koopas,
             goombas
@@ -2559,6 +3128,7 @@ int main()
             player.body.x = centre - player.body.width / 2.0f;
             player.body.y = bottom - player.body.height;
             player.big = false;
+            player.fire = false;
             player.invulnerabilityTimer =
                 damageInvulnerability;
 
@@ -2592,6 +3162,8 @@ int main()
                 koopas,
                 initialKoopas,
                 mushrooms,
+                fireFlowers,
+                fireBalls,
                 jumpBufferTimer,
                 coyoteTimer
             );
@@ -2635,6 +3207,11 @@ int main()
             textures.superMushroom
         );
 
+        DrawFireFlowers(
+            fireFlowers,
+            textures.fireFlower
+        );
+
         DrawLevel(
             level,
             textures
@@ -2668,10 +3245,16 @@ int main()
             );
         }
 
+        DrawFireBalls(
+            fireBalls,
+            textures.fireBall
+        );
+
         DrawPlayer(
             player,
             textures.player,
-            textures.superMario
+            textures.superMario,
+            textures.fireMario
         );
 
         if (IsKeyDown(KEY_F1))
@@ -2731,7 +3314,9 @@ int main()
         );
 
         DrawText(
-            "Space or W: jump",
+            player.fire
+                ? "W: jump / Space: fire"
+                : "Space or W: jump",
             20,
             70,
             20,
@@ -2744,7 +3329,7 @@ int main()
                 coinCount
             ),
             20,
-            100,
+            120,
             18,
             BLACK
         );
@@ -2796,10 +3381,13 @@ int main()
     UnloadTexture(textures.coin);
     UnloadTexture(textures.player);
     UnloadTexture(textures.superMario);
+    UnloadTexture(textures.fireMario);
     UnloadTexture(textures.goomba);
     UnloadTexture(textures.koopa);
     UnloadTexture(textures.greenShell);
     UnloadTexture(textures.superMushroom);
+    UnloadTexture(textures.fireFlower);
+    UnloadTexture(textures.fireBall);
     UnloadTexture(textures.flag);
 
     UnloadRenderTexture(gameTexture);
