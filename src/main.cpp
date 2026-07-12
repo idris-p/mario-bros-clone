@@ -27,6 +27,11 @@ struct Player
     bool sprinting;
     bool facingLeft;
     bool dying;
+    bool ducking;
+    float walkAnimationTimer;
+    int walkAnimationFrame;
+    float fireThrowTimer;
+    bool skidding;
 };
 
 struct SuperMushroom
@@ -36,6 +41,7 @@ struct SuperMushroom
     float targetY;
     bool emerging;
     bool collected;
+    bool oneUp;
 };
 
 struct FireFlower
@@ -51,6 +57,7 @@ struct FireBall
     Rectangle body;
     Vector2 velocity;
     bool alive;
+    float rotation;
 };
 
 struct Goomba
@@ -100,6 +107,9 @@ void KillPlayer(Player& player)
         player.velocity = {0.0f, -650.0f};
         player.onGround = false;
         player.sprinting = false;
+        player.ducking = false;
+        player.fireThrowTimer = 0.0f;
+        player.skidding = false;
     }
 }
 
@@ -138,12 +148,32 @@ struct GameTextures
     Texture2D pipeBase;
     Texture2D coin;
     Texture2D player;
+    Texture2D smallMarioWalk1;
+    Texture2D smallMarioWalk2;
+    Texture2D smallMarioWalk3;
+    Texture2D smallMarioJump;
+    Texture2D smallMarioSwitch;
+    Texture2D marioDead;
     Texture2D superMario;
+    Texture2D superMarioDuck;
+    Texture2D superMarioWalk1;
+    Texture2D superMarioWalk2;
+    Texture2D superMarioWalk3;
+    Texture2D superMarioJump;
+    Texture2D superMarioSwitch;
     Texture2D fireMario;
+    Texture2D fireMarioDuck;
+    Texture2D fireMarioWalk1;
+    Texture2D fireMarioWalk2;
+    Texture2D fireMarioWalk3;
+    Texture2D fireMarioJump;
+    Texture2D fireMarioSwitch;
+    Texture2D fireMarioThrow;
     Texture2D goomba;
     Texture2D koopa;
     Texture2D greenShell;
     Texture2D superMushroom;
+    Texture2D oneUpMushroom;
     Texture2D fireFlower;
     Texture2D fireBall;
     Texture2D flag;
@@ -717,6 +747,11 @@ void CollectSuperMushrooms(
 
         mushroom.collected = true;
 
+        if (mushroom.oneUp)
+        {
+            continue;
+        }
+
         if (!player.big)
         {
             float bottom = player.body.y + player.body.height;
@@ -727,6 +762,7 @@ void CollectSuperMushrooms(
             player.body.x = centre - player.body.width / 2.0f;
             player.body.y = bottom - player.body.height;
             player.big = true;
+            player.ducking = false;
         }
     }
 }
@@ -788,8 +824,9 @@ void UpdateFireBalls(
     float deltaTime
 )
 {
-    constexpr float fireBallGravity = 1500.0f;
-    constexpr float bounceSpeed = 330.0f;
+    constexpr float fireBallGravity = 3375.0f;
+    constexpr float maximumFallSpeed = 540.0f;
+    constexpr float bounceSpeed = 540.0f;
 
     for (FireBall& fireBall : fireBalls)
     {
@@ -827,19 +864,39 @@ void UpdateFireBalls(
         }
 
         float previousY = fireBall.body.y;
-        fireBall.velocity.y += fireBallGravity * deltaTime;
+        fireBall.velocity.y = std::min(
+            maximumFallSpeed,
+            fireBall.velocity.y + fireBallGravity * deltaTime
+        );
         fireBall.body.y += fireBall.velocity.y * deltaTime;
 
         for (const Rectangle& tile : GetNearbySolidTiles(level, fireBall.body))
         {
+            if (!CheckCollisionRecs(fireBall.body, tile))
+            {
+                continue;
+            }
+
             if (
-                CheckCollisionRecs(fireBall.body, tile) &&
                 fireBall.velocity.y > 0.0f &&
                 previousY + fireBall.body.height <= tile.y
             )
             {
                 fireBall.body.y = tile.y - fireBall.body.height;
                 fireBall.velocity.y = -bounceSpeed;
+                fireBall.rotation = std::fmod(
+                    fireBall.rotation + 180.0f,
+                    360.0f
+                );
+                break;
+            }
+
+            if (
+                fireBall.velocity.y < 0.0f &&
+                previousY >= tile.y + tile.height
+            )
+            {
+                fireBall.alive = false;
                 break;
             }
         }
@@ -983,6 +1040,50 @@ std::vector<Rectangle> GetNearbySolidTiles(
     }
 
     return nearbyTiles;
+}
+
+void SetPlayerDucking(
+    Player& player,
+    bool ducking,
+    const Level& level
+)
+{
+    if (!player.big || player.ducking == ducking)
+    {
+        return;
+    }
+
+    float bottom = player.body.y + player.body.height;
+    float centre = player.body.x + player.body.width / 2.0f;
+
+    Rectangle newBody = ducking
+        ? Rectangle{
+            centre - 16.0f,
+            bottom - 44.0f,
+            32.0f,
+            44.0f
+        }
+        : Rectangle{
+            centre - 20.0f,
+            bottom - 88.0f,
+            40.0f,
+            88.0f
+        };
+
+    if (!ducking)
+    {
+        for (const Rectangle& tile :
+            GetNearbySolidTiles(level, newBody))
+        {
+            if (CheckCollisionRecs(newBody, tile))
+            {
+                return;
+            }
+        }
+    }
+
+    player.body = newBody;
+    player.ducking = ducking;
 }
 
 // --------------------------------------------------
@@ -1153,6 +1254,46 @@ void ResolvePlayerVerticalCollisions(
             player.body
         );
 
+    if (player.velocity.y < 0.0f)
+    {
+        int leftColumn = std::max(
+            0,
+            static_cast<int>(std::floor(player.body.x / tileSize)) - 1
+        );
+
+        int rightColumn = std::min(
+            GetLevelColumns(level) - 1,
+            static_cast<int>(std::floor(
+                (player.body.x + player.body.width) / tileSize
+            )) + 1
+        );
+
+        int topRow = std::max(
+            0,
+            static_cast<int>(std::floor(player.body.y / tileSize)) - 1
+        );
+
+        int bottomRow = std::min(
+            GetLevelRows(level) - 1,
+            static_cast<int>(std::floor(
+                (player.body.y + player.body.height) / tileSize
+            )) + 1
+        );
+
+        for (int row = topRow; row <= bottomRow; ++row)
+        {
+            for (int column = leftColumn; column <= rightColumn; ++column)
+            {
+                if (level[row][column] == 'I')
+                {
+                    nearbyTiles.push_back(
+                        GetTileRectangle(row, column)
+                    );
+                }
+            }
+        }
+    }
+
     Rectangle closestCeilingTile{};
     bool hasClosestCeilingTile = false;
 
@@ -1227,6 +1368,83 @@ void ResolvePlayerVerticalCollisions(
                 continue;
             }
 
+            int ceilingColumn =
+                static_cast<int>(std::lround(tile.x / tileSize));
+
+            int ceilingRow =
+                static_cast<int>(std::lround(tile.y / tileSize));
+
+            float playerCentreX =
+                player.body.x + player.body.width / 2.0f;
+
+            float tileCentreX =
+                tile.x + tile.width / 2.0f;
+
+            bool gapOnLeft =
+                ceilingColumn > 0 &&
+                !IsSolidTile(
+                    level,
+                    ceilingRow,
+                    ceilingColumn - 1
+                );
+
+            bool gapOnRight =
+                ceilingColumn + 1 < GetLevelColumns(level) &&
+                !IsSolidTile(
+                    level,
+                    ceilingRow,
+                    ceilingColumn + 1
+                );
+
+            constexpr float cornerSeparation = 0.1f;
+            bool correctedIntoGap = false;
+
+            float overlapWidth = std::max(
+                0.0f,
+                std::min(
+                    player.body.x + player.body.width,
+                    tile.x + tile.width
+                ) -
+                std::max(player.body.x, tile.x)
+            );
+
+            bool lessThanHalfUnderBlock =
+                overlapWidth < player.body.width / 2.0f;
+
+            if (
+                lessThanHalfUnderBlock &&
+                playerCentreX < tileCentreX &&
+                gapOnLeft
+            )
+            {
+                player.body.x =
+                    tile.x - player.body.width - cornerSeparation;
+
+                correctedIntoGap = true;
+            }
+            else if (
+                lessThanHalfUnderBlock &&
+                playerCentreX > tileCentreX &&
+                gapOnRight
+            )
+            {
+                player.body.x =
+                    tile.x + tile.width + cornerSeparation;
+
+                correctedIntoGap = true;
+            }
+
+            if (correctedIntoGap)
+            {
+                player.body.x = std::clamp(
+                    player.body.x,
+                    0.0f,
+                    GetLevelWidth(level) - player.body.width
+                );
+
+                continue;
+            }
+
             float tileBottom =
                 tile.y + tile.height;
 
@@ -1248,6 +1466,7 @@ void ResolvePlayerVerticalCollisions(
                     hitTile == 'B' ||
                     hitTile == 'M' ||
                     hitTile == 'A' ||
+                    hitTile == 'I' ||
                     hitTile == 'Q'
                 )
                 {
@@ -1275,19 +1494,22 @@ void ResolvePlayerVerticalCollisions(
                     constexpr float mushroomSize =
                         static_cast<float>(tileSize);
 
+                    constexpr float powerUpHitboxWidth =
+                        mushroomSize + 2.0f;
+
                     constexpr float blockBumpHeight = 10.0f;
 
                     mushrooms.push_back({
                         {
-                            tile.x +
-                                (tileSize - mushroomSize) / 2.0f,
+                            tile.x - 1.0f,
                             tile.y - blockBumpHeight,
-                            mushroomSize,
+                            powerUpHitboxWidth,
                             mushroomSize
                         },
                         {0.0f, 0.0f},
                         tile.y - mushroomSize,
                         true,
+                        false,
                         false
                     });
                 }
@@ -1299,15 +1521,18 @@ void ResolvePlayerVerticalCollisions(
                     constexpr float itemSize =
                         static_cast<float>(tileSize);
 
+                    constexpr float powerUpHitboxWidth =
+                        itemSize + 2.0f;
+
                     constexpr float blockBumpHeight = 10.0f;
 
                     if (player.big)
                     {
                         fireFlowers.push_back({
                             {
-                                tile.x,
+                                tile.x - 1.0f,
                                 tile.y - blockBumpHeight,
-                                itemSize,
+                                powerUpHitboxWidth,
                                 itemSize
                             },
                             tile.y - itemSize,
@@ -1319,17 +1544,43 @@ void ResolvePlayerVerticalCollisions(
                     {
                         mushrooms.push_back({
                             {
-                                tile.x,
+                                tile.x - 1.0f,
                                 tile.y - blockBumpHeight,
-                                itemSize,
+                                powerUpHitboxWidth,
                                 itemSize
                             },
                             {0.0f, 0.0f},
                             tile.y - itemSize,
                             true,
+                            false,
                             false
                         });
                     }
+                }
+                else if (hitTile == 'I')
+                {
+                    hitTile = 'E';
+                    StartBlockBump(tileRow, tileColumn);
+
+                    constexpr float itemSize =
+                        static_cast<float>(tileSize);
+
+                    constexpr float hitboxWidth = itemSize + 2.0f;
+                    constexpr float blockBumpHeight = 10.0f;
+
+                    mushrooms.push_back({
+                        {
+                            tile.x - 1.0f,
+                            tile.y - blockBumpHeight,
+                            hitboxWidth,
+                            itemSize
+                        },
+                        {0.0f, 0.0f},
+                        tile.y - itemSize,
+                        true,
+                        false,
+                        true
+                    });
                 }
                 else if (hitTile == 'Q')
                 {
@@ -1422,13 +1673,6 @@ void ResolveGoombaHorizontalCollisions(
 
     float levelWidth =
         GetLevelWidth(level);
-
-    if (goomba.body.x < 0.0f)
-    {
-        goomba.body.x = 0.0f;
-        goomba.velocity.x =
-            std::abs(goomba.velocity.x);
-    }
 
     if (
         goomba.body.x +
@@ -1632,12 +1876,7 @@ void ResolveKoopaHorizontalCollisions(
         }
     }
 
-    if (koopa.body.x < 0.0f)
-    {
-        koopa.body.x = 0.0f;
-        koopa.velocity.x = std::abs(koopa.velocity.x);
-    }
-    else if (koopa.body.x + koopa.body.width > GetLevelWidth(level))
+    if (koopa.body.x + koopa.body.width > GetLevelWidth(level))
     {
         koopa.body.x = GetLevelWidth(level) - koopa.body.width;
         koopa.velocity.x = -std::abs(koopa.velocity.x);
@@ -2238,25 +2477,91 @@ void DrawLevel(
 
 void DrawPlayer(
     const Player& player,
-    const Texture2D& smallTexture,
-    const Texture2D& bigTexture,
-    const Texture2D& fireTexture
+    const GameTextures& textures
 )
 {
-    const Texture2D& texture = player.fire
-        ? fireTexture
-        : (player.big ? bigTexture : smallTexture);
+    const Texture2D* texture = &textures.player;
 
-    Rectangle source = player.big
-        ? Rectangle{0.0f, 0.0f, 16.0f, 32.0f}
-        : Rectangle{0.0f, 0.0f, 12.0f, 16.0f};
+    const Texture2D* smallWalkTextures[] = {
+        &textures.smallMarioWalk1,
+        &textures.smallMarioWalk2,
+        &textures.smallMarioWalk3
+    };
+
+    const Texture2D* superWalkTextures[] = {
+        &textures.superMarioWalk1,
+        &textures.superMarioWalk2,
+        &textures.superMarioWalk3
+    };
+
+    const Texture2D* fireWalkTextures[] = {
+        &textures.fireMarioWalk1,
+        &textures.fireMarioWalk2,
+        &textures.fireMarioWalk3
+    };
+
+    if (player.dying)
+    {
+        texture = &textures.marioDead;
+    }
+    else if (player.ducking)
+    {
+        texture = player.fire
+            ? &textures.fireMarioDuck
+            : &textures.superMarioDuck;
+    }
+    else if (player.fireThrowTimer > 0.0f && player.fire)
+    {
+        texture = &textures.fireMarioThrow;
+    }
+    else if (!player.onGround)
+    {
+        texture = player.fire
+            ? &textures.fireMarioJump
+            : (player.big
+                ? &textures.superMarioJump
+                : &textures.smallMarioJump);
+    }
+    else if (player.skidding)
+    {
+        texture = player.fire
+            ? &textures.fireMarioSwitch
+            : (player.big
+                ? &textures.superMarioSwitch
+                : &textures.smallMarioSwitch);
+    }
+    else if (std::abs(player.velocity.x) > 5.0f)
+    {
+        int frame = player.walkAnimationFrame % 3;
+        texture = player.fire
+            ? fireWalkTextures[frame]
+            : (player.big
+                ? superWalkTextures[frame]
+                : smallWalkTextures[frame]);
+    }
+    else if (player.fire)
+    {
+        texture = &textures.fireMario;
+    }
+    else if (player.big)
+    {
+        texture = &textures.superMario;
+    }
+
+    Rectangle source{
+        0.0f,
+        0.0f,
+        static_cast<float>(texture->width),
+        static_cast<float>(texture->height)
+    };
+
+    constexpr float marioSpriteScale = 3.0f;
+
+    float spriteWidth =
+        texture->width * marioSpriteScale;
 
     float spriteHeight =
-        player.big ? 96.0f : 48.0f;
-
-    float spriteWidth = player.big
-        ? spriteHeight * (16.0f / 32.0f)
-        : spriteHeight * (12.0f / 16.0f);
+        texture->height * marioSpriteScale;
 
     Rectangle destination{
         player.body.x +
@@ -2271,7 +2576,7 @@ void DrawPlayer(
     };
 
     DrawTextureInsideRectangle(
-        texture,
+        *texture,
         source,
         destination,
         player.facingLeft
@@ -2289,7 +2594,11 @@ void DrawFireFlowers(
     {
         if (!flower.collected)
         {
-            DrawTextureInsideRectangle(texture, source, flower.body);
+            Rectangle spriteBody = flower.body;
+            spriteBody.x += 1.0f;
+            spriteBody.width -= 2.0f;
+
+            DrawTextureInsideRectangle(texture, source, spriteBody);
         }
     }
 }
@@ -2303,13 +2612,31 @@ void DrawFireBalls(
 
     for (const FireBall& fireBall : fireBalls)
     {
-        DrawTextureInsideRectangle(texture, source, fireBall.body);
+        Rectangle destination{
+            fireBall.body.x + fireBall.body.width / 2.0f,
+            fireBall.body.y + fireBall.body.height / 2.0f,
+            fireBall.body.width,
+            fireBall.body.height
+        };
+
+        DrawTexturePro(
+            texture,
+            source,
+            destination,
+            {
+                fireBall.body.width / 2.0f,
+                fireBall.body.height / 2.0f
+            },
+            fireBall.rotation,
+            WHITE
+        );
     }
 }
 
 void DrawSuperMushrooms(
     const std::vector<SuperMushroom>& mushrooms,
-    const Texture2D& texture
+    const Texture2D& superTexture,
+    const Texture2D& oneUpTexture
 )
 {
     Rectangle source{0.0f, 0.0f, 16.0f, 16.0f};
@@ -2318,10 +2645,18 @@ void DrawSuperMushrooms(
     {
         if (!mushroom.collected)
         {
+            const Texture2D& texture = mushroom.oneUp
+                ? oneUpTexture
+                : superTexture;
+
+            Rectangle spriteBody = mushroom.body;
+            spriteBody.x += 1.0f;
+            spriteBody.width -= 2.0f;
+
             DrawTextureInsideRectangle(
                 texture,
                 source,
-                mushroom.body
+                spriteBody
             );
         }
     }
@@ -2488,7 +2823,8 @@ void DrawKoopa(
 void UpdateCamera(
     Camera2D& camera,
     const Player& player,
-    const Level& level
+    const Level& level,
+    float deltaTime
 )
 {
     const float levelWidth =
@@ -2516,7 +2852,12 @@ void UpdateCamera(
         camera.target.x
     );
 
-    camera.target.x = desiredTargetX;
+    constexpr float cameraFollowSpeed = 520.0f;
+
+    camera.target.x = std::min(
+        desiredTargetX,
+        camera.target.x + cameraFollowSpeed * deltaTime
+    );
 
     camera.target.y =
         virtualHeight / 2.0f;
@@ -2631,6 +2972,11 @@ void RespawnPlayer(
     player.sprinting = false;
     player.facingLeft = false;
     player.dying = false;
+    player.ducking = false;
+    player.walkAnimationTimer = 0.0f;
+    player.walkAnimationFrame = 0;
+    player.fireThrowTimer = 0.0f;
+    player.skidding = false;
 
     jumpBufferTimer = 0.0f;
     coyoteTimer = 0.0f;
@@ -2663,9 +3009,9 @@ int main()
     constexpr float walkSpeed = 280.0f;
     constexpr float sprintSpeed = 450.0f;
 
-    constexpr float walkingAcceleration = 1400.0f;
-    constexpr float sprintAcceleration = 1900.0f;
-    constexpr float friction = 1800.0f;
+    constexpr float walkingAcceleration = 750.0f;
+    constexpr float sprintAcceleration = 950.0f;
+    constexpr float friction = 1050.0f;
 
     constexpr float jumpSpeed = 850.0f;
     constexpr float gravity = 1800.0f;
@@ -2689,11 +3035,11 @@ int main()
         "......................Q.........................................................BBBBBBBB...BBBQ..............M...........BBB....BQQB........................................................SS......................",
         "...........................................................................................................................................................................................SSS......................",
         "...............................................................................G..........................................................................................................SSSS......................",
-        ".........................................................................................................................................................................................SSSSS......................",
-        "................Q...BMBQB.....................Hh.........Hh..................BAB..............C.....BB....Q..Q..Q.....B..........BB......S..S..........SS..S............BBQB............SSSSSS......................",
+        "................................................................I........................................................................................................................SSSSS......................",
+        "................Q...BMBQB.....................Hh.........Hh..................BAB..............B.....BB....Q..Q..Q.....B..........BB......S..S..........SS..S............BBQB............SSSSSS......................",
         "......................................Hh......Vv.........Vv.............................................................................SS..SS........SSS..SS..........................SSSSSSS......................",
         "............................Hh........Vv......Vv.........Vv............................................................................SSS..SSS......SSSS..SSS.....Hh..............Hh.SSSSSSSS........F.............",
-        "...P........K....K...G......Vv........Vv.G....Vv.....G.G.Vv....................................G.G........K.................GG.G.G....SSSS..SSSS....SSSSS..SSSS....Vv.........GG...VvSSSSSSSSS........S.............",
+        "...P.................G......Vv........Vv.G....Vv.....G.G.Vv....................................G.G........K.................GG.G.G....SSSS..SSSS....SSSSS..SSSS....Vv.........GG...VvSSSSSSSSS........S.............",
         "#####################################################################..###############...################################################################..#########################################################",
         "#####################################################################..###############...################################################################..#########################################################",
         "#####################################################################..###############...################################################################..#########################################################",
@@ -2741,12 +3087,32 @@ int main()
         LoadTexture("resources/Pipe_Base.png"),
         LoadTexture("resources/Coin.png"),
         LoadTexture("resources/Mario/Small_Mario.png"),
+        LoadTexture("resources/Mario/Small_Mario_Walk_1.png"),
+        LoadTexture("resources/Mario/Small_Mario_Walk_2.png"),
+        LoadTexture("resources/Mario/Small_Mario_Walk_3.png"),
+        LoadTexture("resources/Mario/Small_Mario_Jump.png"),
+        LoadTexture("resources/Mario/Small_Mario_Switch.png"),
+        LoadTexture("resources/Mario/Mario_Dead.png"),
         LoadTexture("resources/Mario/Super_Mario.png"),
+        LoadTexture("resources/Mario/Super_Mario_Duck.png"),
+        LoadTexture("resources/Mario/Super_Mario_Walk_1.png"),
+        LoadTexture("resources/Mario/Super_Mario_Walk_2.png"),
+        LoadTexture("resources/Mario/Super_Mario_Walk_3.png"),
+        LoadTexture("resources/Mario/Super_Mario_Jump.png"),
+        LoadTexture("resources/Mario/Super_Mario_Switch.png"),
         LoadTexture("resources/Mario/Fire_Mario.png"),
+        LoadTexture("resources/Mario/Fire_Mario_Duck.png"),
+        LoadTexture("resources/Mario/Fire_Mario_Walk_1.png"),
+        LoadTexture("resources/Mario/Fire_Mario_Walk_2.png"),
+        LoadTexture("resources/Mario/Fire_Mario_Walk_3.png"),
+        LoadTexture("resources/Mario/Fire_Mario_Jump.png"),
+        LoadTexture("resources/Mario/Fire_Mario_Switch.png"),
+        LoadTexture("resources/Mario/Fire_Mario_Fire.png"),
         LoadTexture("resources/Enemies/Goomba.png"),
         LoadTexture("resources/Enemies/Green_Koopa.png"),
         LoadTexture("resources/Green_Shell.png"),
         LoadTexture("resources/Items/Super_Mushroom.png"),
+        LoadTexture("resources/Items/1_Up_Mushroom.png"),
         LoadTexture("resources/Items/Fire_Flower.png"),
         LoadTexture("resources/Fire_Ball.png"),
         LoadTexture("resources/Flag.png")
@@ -2791,8 +3157,29 @@ int main()
         TEXTURE_FILTER_POINT
     );
 
+    SetTextureFilter(textures.smallMarioWalk1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallMarioWalk2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallMarioWalk3, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallMarioJump, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallMarioSwitch, TEXTURE_FILTER_POINT);
+
+    SetTextureFilter(textures.marioDead, TEXTURE_FILTER_POINT);
+
     SetTextureFilter(textures.superMario, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superMarioDuck, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superMarioWalk1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superMarioWalk2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superMarioWalk3, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superMarioJump, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superMarioSwitch, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.fireMario, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireMarioDuck, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireMarioWalk1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireMarioWalk2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireMarioWalk3, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireMarioJump, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireMarioSwitch, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireMarioThrow, TEXTURE_FILTER_POINT);
 
     SetTextureFilter(
         textures.goomba,
@@ -2802,6 +3189,7 @@ int main()
     SetTextureFilter(textures.koopa, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.greenShell, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.superMushroom, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.oneUpMushroom, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.fireFlower, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.fireBall, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.flag, TEXTURE_FILTER_POINT);
@@ -2811,12 +3199,32 @@ int main()
         textures.pipeBase.id == 0 ||
         textures.emptyBlock.id == 0 ||
         textures.player.id == 0 ||
+        textures.smallMarioWalk1.id == 0 ||
+        textures.smallMarioWalk2.id == 0 ||
+        textures.smallMarioWalk3.id == 0 ||
+        textures.smallMarioJump.id == 0 ||
+        textures.smallMarioSwitch.id == 0 ||
+        textures.marioDead.id == 0 ||
         textures.superMario.id == 0 ||
+        textures.superMarioDuck.id == 0 ||
+        textures.superMarioWalk1.id == 0 ||
+        textures.superMarioWalk2.id == 0 ||
+        textures.superMarioWalk3.id == 0 ||
+        textures.superMarioJump.id == 0 ||
+        textures.superMarioSwitch.id == 0 ||
         textures.fireMario.id == 0 ||
+        textures.fireMarioDuck.id == 0 ||
+        textures.fireMarioWalk1.id == 0 ||
+        textures.fireMarioWalk2.id == 0 ||
+        textures.fireMarioWalk3.id == 0 ||
+        textures.fireMarioJump.id == 0 ||
+        textures.fireMarioSwitch.id == 0 ||
+        textures.fireMarioThrow.id == 0 ||
         textures.goomba.id == 0 ||
         textures.koopa.id == 0 ||
         textures.greenShell.id == 0 ||
         textures.superMushroom.id == 0 ||
+        textures.oneUpMushroom.id == 0 ||
         textures.fireFlower.id == 0 ||
         textures.fireBall.id == 0 ||
         textures.flag.id == 0
@@ -2831,12 +3239,32 @@ int main()
         UnloadTexture(textures.pipeBase);
         UnloadTexture(textures.emptyBlock);
         UnloadTexture(textures.player);
+        UnloadTexture(textures.smallMarioWalk1);
+        UnloadTexture(textures.smallMarioWalk2);
+        UnloadTexture(textures.smallMarioWalk3);
+        UnloadTexture(textures.smallMarioJump);
+        UnloadTexture(textures.smallMarioSwitch);
+        UnloadTexture(textures.marioDead);
         UnloadTexture(textures.superMario);
+        UnloadTexture(textures.superMarioDuck);
+        UnloadTexture(textures.superMarioWalk1);
+        UnloadTexture(textures.superMarioWalk2);
+        UnloadTexture(textures.superMarioWalk3);
+        UnloadTexture(textures.superMarioJump);
+        UnloadTexture(textures.superMarioSwitch);
         UnloadTexture(textures.fireMario);
+        UnloadTexture(textures.fireMarioDuck);
+        UnloadTexture(textures.fireMarioWalk1);
+        UnloadTexture(textures.fireMarioWalk2);
+        UnloadTexture(textures.fireMarioWalk3);
+        UnloadTexture(textures.fireMarioJump);
+        UnloadTexture(textures.fireMarioSwitch);
+        UnloadTexture(textures.fireMarioThrow);
         UnloadTexture(textures.goomba);
         UnloadTexture(textures.koopa);
         UnloadTexture(textures.greenShell);
         UnloadTexture(textures.superMushroom);
+        UnloadTexture(textures.oneUpMushroom);
         UnloadTexture(textures.fireFlower);
         UnloadTexture(textures.fireBall);
         UnloadTexture(textures.flag);
@@ -2873,6 +3301,11 @@ int main()
         0.0f,
         false,
         false,
+        false,
+        false,
+        0.0f,
+        0,
+        0.0f,
         false
     };
 
@@ -2933,6 +3366,11 @@ int main()
             player.invulnerabilityTimer - deltaTime
         );
 
+        player.fireThrowTimer = std::max(
+            0.0f,
+            player.fireThrowTimer - deltaTime
+        );
+
         UpdateBlockBumps(
             deltaTime,
             mushrooms,
@@ -2979,6 +3417,28 @@ int main()
             player.facingLeft = false;
         }
 
+        bool wantsToDuck =
+            IsKeyDown(KEY_S) ||
+            IsKeyDown(KEY_DOWN);
+
+        if (player.big)
+        {
+            if (wantsToDuck && wasOnGround)
+            {
+                SetPlayerDucking(player, true, level);
+            }
+            else if (!wantsToDuck)
+            {
+                SetPlayerDucking(player, false, level);
+            }
+        }
+
+        if (player.ducking)
+        {
+            direction = 0.0f;
+            player.sprinting = false;
+        }
+
         bool sprintKeyDown =
             IsKeyDown(KEY_LEFT_SHIFT) ||
             IsKeyDown(KEY_RIGHT_SHIFT);
@@ -2987,7 +3447,7 @@ int main()
         {
             player.sprinting = false;
         }
-        else if (wasOnGround)
+        else if (wasOnGround && !player.ducking)
         {
             player.sprinting = true;
         }
@@ -3011,12 +3471,13 @@ int main()
         if (
             !player.dying &&
             player.fire &&
+            !player.ducking &&
             IsKeyPressed(KEY_SPACE) &&
             fireBalls.size() < 2
         )
         {
             constexpr float fireBallSize = 24.0f;
-            constexpr float fireBallSpeed = 480.0f;
+            constexpr float fireBallSpeed = 720.0f;
 
             bool shootLeft = player.facingLeft;
 
@@ -3033,10 +3494,13 @@ int main()
                 },
                 {
                     shootLeft ? -fireBallSpeed : fireBallSpeed,
-                    0.0f
+                    540.0f
                 },
-                true
+                true,
+                0.0f
             });
+
+            player.fireThrowTimer = 0.14f;
         }
 
         if (
@@ -3083,11 +3547,29 @@ int main()
         // Horizontal movement
         // --------------------------------
 
+        player.skidding =
+            !player.dying &&
+            !player.ducking &&
+            wasOnGround &&
+            direction != 0.0f &&
+            player.velocity.x * direction < 0.0f &&
+            std::abs(player.velocity.x) > 5.0f;
+
         if (direction != 0.0f)
         {
+            bool reversingDirection =
+                player.velocity.x * direction < 0.0f;
+
+            // SMB doubles its fractional friction while Mario faces
+            // opposite his current movement direction, producing the
+            // characteristic skid before acceleration resumes.
+            float appliedAcceleration = reversingDirection
+                ? currentAcceleration * 2.0f
+                : currentAcceleration;
+
             player.velocity.x +=
                 direction *
-                currentAcceleration *
+                appliedAcceleration *
                 deltaTime;
 
             player.velocity.x =
@@ -3235,6 +3717,39 @@ int main()
         }
         }
 
+        bool marioWalking =
+            !player.dying &&
+            !player.ducking &&
+            !player.skidding &&
+            player.onGround &&
+            std::abs(player.velocity.x) > 5.0f;
+
+        if (marioWalking)
+        {
+            float speedRatio = std::clamp(
+                std::abs(player.velocity.x) / sprintSpeed,
+                0.0f,
+                1.0f
+            );
+
+            float frameDuration =
+                0.14f - speedRatio * 0.07f;
+
+            player.walkAnimationTimer += deltaTime;
+
+            while (player.walkAnimationTimer >= frameDuration)
+            {
+                player.walkAnimationTimer -= frameDuration;
+                player.walkAnimationFrame =
+                    (player.walkAnimationFrame + 1) % 3;
+            }
+        }
+        else
+        {
+            player.walkAnimationTimer = 0.0f;
+            player.walkAnimationFrame = 0;
+        }
+
         // --------------------------------
         // Enemy physics
         // --------------------------------
@@ -3325,6 +3840,7 @@ int main()
             player.body.y = bottom - player.body.height;
             player.big = false;
             player.fire = false;
+            player.ducking = false;
             player.invulnerabilityTimer =
                 damageInvulnerability;
 
@@ -3343,7 +3859,7 @@ int main()
             !player.dying &&
             player.body.y > cameraBottom;
 
-        if (playerFell || playerHitEnemy)
+        if (playerHitEnemy)
         {
             KillPlayer(player);
         }
@@ -3353,7 +3869,7 @@ int main()
             player.velocity.y > 0.0f &&
             player.body.y > cameraBottom + 100.0f;
 
-        if (deathAnimationFinished)
+        if (playerFell || deathAnimationFinished)
         {
             RespawnPlayer(
                 player,
@@ -3384,7 +3900,8 @@ int main()
         UpdateCamera(
             camera,
             player,
-            level
+            level,
+            deltaTime
         );
 
         float cameraLeft =
@@ -3397,6 +3914,49 @@ int main()
         {
             player.body.x = cameraLeft;
             player.velocity.x = 0.0f;
+        }
+
+        bool cameraAtLevelStart =
+            camera.target.x <= virtualWidth / 2.0f + 0.1f;
+
+        if (cameraAtLevelStart)
+        {
+            float viewportLeft =
+                camera.target.x -
+                virtualWidth / (2.0f * camera.zoom);
+
+            for (Goomba& goomba : goombas)
+            {
+                if (
+                    goomba.alive &&
+                    goomba.body.x + goomba.body.width < viewportLeft
+                )
+                {
+                    goomba.alive = false;
+                }
+            }
+
+            for (Koopa& koopa : koopas)
+            {
+                if (
+                    koopa.alive &&
+                    koopa.body.x + koopa.body.width < viewportLeft
+                )
+                {
+                    koopa.alive = false;
+                }
+            }
+
+            for (SuperMushroom& mushroom : mushrooms)
+            {
+                if (
+                    !mushroom.collected &&
+                    mushroom.body.x + mushroom.body.width < viewportLeft
+                )
+                {
+                    mushroom.collected = true;
+                }
+            }
         }
 
         // --------------------------------
@@ -3412,7 +3972,8 @@ int main()
         // Draw items behind tiles so mushrooms rise out of blocks.
         DrawSuperMushrooms(
             mushrooms,
-            textures.superMushroom
+            textures.superMushroom,
+            textures.oneUpMushroom
         );
 
         DrawFireFlowers(
@@ -3460,9 +4021,7 @@ int main()
 
         DrawPlayer(
             player,
-            textures.player,
-            textures.superMario,
-            textures.fireMario
+            textures
         );
 
         if (IsKeyDown(KEY_F1))
@@ -3588,12 +4147,32 @@ int main()
     UnloadTexture(textures.pipeBase);
     UnloadTexture(textures.coin);
     UnloadTexture(textures.player);
+    UnloadTexture(textures.smallMarioWalk1);
+    UnloadTexture(textures.smallMarioWalk2);
+    UnloadTexture(textures.smallMarioWalk3);
+    UnloadTexture(textures.smallMarioJump);
+    UnloadTexture(textures.smallMarioSwitch);
+    UnloadTexture(textures.marioDead);
     UnloadTexture(textures.superMario);
+    UnloadTexture(textures.superMarioDuck);
+    UnloadTexture(textures.superMarioWalk1);
+    UnloadTexture(textures.superMarioWalk2);
+    UnloadTexture(textures.superMarioWalk3);
+    UnloadTexture(textures.superMarioJump);
+    UnloadTexture(textures.superMarioSwitch);
     UnloadTexture(textures.fireMario);
+    UnloadTexture(textures.fireMarioDuck);
+    UnloadTexture(textures.fireMarioWalk1);
+    UnloadTexture(textures.fireMarioWalk2);
+    UnloadTexture(textures.fireMarioWalk3);
+    UnloadTexture(textures.fireMarioJump);
+    UnloadTexture(textures.fireMarioSwitch);
+    UnloadTexture(textures.fireMarioThrow);
     UnloadTexture(textures.goomba);
     UnloadTexture(textures.koopa);
     UnloadTexture(textures.greenShell);
     UnloadTexture(textures.superMushroom);
+    UnloadTexture(textures.oneUpMushroom);
     UnloadTexture(textures.fireFlower);
     UnloadTexture(textures.fireBall);
     UnloadTexture(textures.flag);
