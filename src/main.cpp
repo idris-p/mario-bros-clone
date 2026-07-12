@@ -10,6 +10,17 @@ struct Player
     Rectangle body;
     Vector2 velocity;
     bool onGround;
+    bool big;
+    float invulnerabilityTimer;
+};
+
+struct SuperMushroom
+{
+    Rectangle body;
+    Vector2 velocity;
+    float targetY;
+    bool emerging;
+    bool collected;
 };
 
 struct Goomba
@@ -21,10 +32,27 @@ struct Goomba
     bool spawned;
 };
 
+struct Koopa
+{
+    Rectangle body;
+    Vector2 velocity;
+    bool onGround;
+    bool alive;
+    bool spawned;
+    bool shelled;
+};
+
 struct Coin
 {
     Rectangle body;
     bool collected;
+};
+
+struct BlockCoin
+{
+    Rectangle body;
+    float blockTopY;
+    float age;
 };
 
 struct GameTextures
@@ -32,11 +60,18 @@ struct GameTextures
     Texture2D ground;
     Texture2D brick;
     Texture2D questionBlock;
+    Texture2D emptyBlock;
     Texture2D stairBlock;
     Texture2D pipe;
+    Texture2D pipeBase;
     Texture2D coin;
     Texture2D player;
+    Texture2D superMario;
     Texture2D goomba;
+    Texture2D koopa;
+    Texture2D greenShell;
+    Texture2D superMushroom;
+    Texture2D flag;
 };
 
 using Level = std::vector<std::string>;
@@ -140,6 +175,8 @@ bool IsSolidTile(
         tile == '#' ||
         tile == 'B' ||
         tile == 'Q' ||
+        tile == 'M' ||
+        tile == 'E' ||
         tile == 'S' ||
         tile == 'H' ||
         tile == 'h' ||
@@ -273,7 +310,46 @@ std::vector<Goomba> FindGoombaSpawns(
     return goombas;
 }
 
+std::vector<Koopa> FindKoopaSpawns(
+    const Level& level
+)
+{
+    std::vector<Koopa> koopas;
+
+    for (int row = 0; row < GetLevelRows(level); ++row)
+    {
+        for (int column = 0; column < GetLevelColumns(level); ++column)
+        {
+            if (level[row][column] != 'K')
+            {
+                continue;
+            }
+
+            koopas.push_back({
+                {
+                    column * static_cast<float>(tileSize) + 6.0f,
+                    row * static_cast<float>(tileSize),
+                    36.0f,
+                    48.0f
+                },
+                {-90.0f, 0.0f},
+                false,
+                true,
+                false,
+                false
+            });
+        }
+    }
+
+    return koopas;
+}
+
 // Collect Coins
+
+std::vector<Rectangle> GetNearbySolidTiles(
+    const Level& level,
+    const Rectangle& body
+);
 
 int CollectCoins(
     const Player& player,
@@ -300,6 +376,155 @@ int CollectCoins(
     }
 
     return collectedThisFrame;
+}
+
+void UpdateBlockCoins(
+    std::vector<BlockCoin>& blockCoins,
+    float deltaTime
+)
+{
+    constexpr float animationDuration = 0.65f;
+    constexpr float riseHeight = 42.0f;
+
+    for (BlockCoin& coin : blockCoins)
+    {
+        coin.age += deltaTime;
+
+        float progress = std::clamp(
+            coin.age / animationDuration,
+            0.0f,
+            1.0f
+        );
+
+        coin.body.y =
+            coin.blockTopY -
+            coin.body.height -
+            std::sin(progress * PI) * riseHeight;
+    }
+
+    blockCoins.erase(
+        std::remove_if(
+            blockCoins.begin(),
+            blockCoins.end(),
+            [animationDuration](const BlockCoin& coin)
+            {
+                return coin.age >= animationDuration;
+            }
+        ),
+        blockCoins.end()
+    );
+}
+
+void UpdateSuperMushrooms(
+    std::vector<SuperMushroom>& mushrooms,
+    const Level& level,
+    float deltaTime,
+    float gravity
+)
+{
+    constexpr float emergeSpeed = 48.0f;
+    constexpr float moveSpeed = 100.0f;
+
+    for (SuperMushroom& mushroom : mushrooms)
+    {
+        if (mushroom.collected)
+        {
+            continue;
+        }
+
+        if (mushroom.emerging)
+        {
+            mushroom.body.y = std::max(
+                mushroom.targetY,
+                mushroom.body.y - emergeSpeed * deltaTime
+            );
+
+            if (mushroom.body.y <= mushroom.targetY)
+            {
+                mushroom.emerging = false;
+                mushroom.velocity.x = moveSpeed;
+            }
+
+            continue;
+        }
+
+        float previousX = mushroom.body.x;
+        mushroom.body.x += mushroom.velocity.x * deltaTime;
+
+        for (const Rectangle& tile : GetNearbySolidTiles(level, mushroom.body))
+        {
+            if (!CheckCollisionRecs(mushroom.body, tile))
+            {
+                continue;
+            }
+
+            if (mushroom.velocity.x > 0.0f && previousX + mushroom.body.width <= tile.x)
+            {
+                mushroom.body.x = tile.x - mushroom.body.width;
+                mushroom.velocity.x = -moveSpeed;
+            }
+            else if (mushroom.velocity.x < 0.0f && previousX >= tile.x + tile.width)
+            {
+                mushroom.body.x = tile.x + tile.width;
+                mushroom.velocity.x = moveSpeed;
+            }
+        }
+
+        float previousY = mushroom.body.y;
+        mushroom.velocity.y += gravity * deltaTime;
+        mushroom.body.y += mushroom.velocity.y * deltaTime;
+
+        for (const Rectangle& tile : GetNearbySolidTiles(level, mushroom.body))
+        {
+            if (!CheckCollisionRecs(mushroom.body, tile))
+            {
+                continue;
+            }
+
+            if (mushroom.velocity.y > 0.0f && previousY + mushroom.body.height <= tile.y)
+            {
+                mushroom.body.y = tile.y - mushroom.body.height;
+                mushroom.velocity.y = 0.0f;
+            }
+            else if (mushroom.velocity.y < 0.0f && previousY >= tile.y + tile.height)
+            {
+                mushroom.body.y = tile.y + tile.height;
+                mushroom.velocity.y = 0.0f;
+            }
+        }
+    }
+}
+
+void CollectSuperMushrooms(
+    Player& player,
+    std::vector<SuperMushroom>& mushrooms
+)
+{
+    for (SuperMushroom& mushroom : mushrooms)
+    {
+        if (
+            mushroom.collected ||
+            mushroom.emerging ||
+            !CheckCollisionRecs(player.body, mushroom.body)
+        )
+        {
+            continue;
+        }
+
+        mushroom.collected = true;
+
+        if (!player.big)
+        {
+            float bottom = player.body.y + player.body.height;
+            float centre = player.body.x + player.body.width / 2.0f;
+
+            player.body.width = 40.0f;
+            player.body.height = 88.0f;
+            player.body.x = centre - player.body.width / 2.0f;
+            player.body.y = bottom - player.body.height;
+            player.big = true;
+        }
+    }
 }
 
 // --------------------------------------------------
@@ -461,7 +686,10 @@ void ResolvePlayerHorizontalCollisions(
 
 void ResolvePlayerVerticalCollisions(
     Player& player,
-    const Level& level,
+    Level& level,
+    std::vector<SuperMushroom>& mushrooms,
+    std::vector<BlockCoin>& blockCoins,
+    int& coinCount,
     float deltaTime
 )
 {
@@ -510,6 +738,60 @@ void ResolvePlayerVerticalCollisions(
             {
                 player.body.y = tileBottom;
                 player.velocity.y = 0.0f;
+
+                int tileColumn =
+                    static_cast<int>(tile.x / tileSize);
+
+                int tileRow =
+                    static_cast<int>(tile.y / tileSize);
+
+                char& hitTile =
+                    level[tileRow][tileColumn];
+
+                if (hitTile == 'B' && player.big)
+                {
+                    hitTile = '.';
+                }
+                else if (hitTile == 'M')
+                {
+                    hitTile = 'E';
+
+                    constexpr float mushroomSize = 40.0f;
+
+                    mushrooms.push_back({
+                        {
+                            tile.x +
+                                (tileSize - mushroomSize) / 2.0f,
+                            tile.y,
+                            mushroomSize,
+                            mushroomSize
+                        },
+                        {0.0f, 0.0f},
+                        tile.y - mushroomSize,
+                        true,
+                        false
+                    });
+                }
+                else if (hitTile == 'Q')
+                {
+                    hitTile = 'E';
+                    ++coinCount;
+
+                    constexpr float coinWidth = 24.0f;
+                    constexpr float coinHeight = 32.0f;
+
+                    blockCoins.push_back({
+                        {
+                            tile.x +
+                                (tileSize - coinWidth) / 2.0f,
+                            tile.y,
+                            coinWidth,
+                            coinHeight
+                        },
+                        tile.y,
+                        0.0f
+                    });
+                }
             }
         }
     }
@@ -732,6 +1014,141 @@ void SpawnGoombasNearCamera(
     }
 }
 
+void ResolveKoopaHorizontalCollisions(
+    Koopa& koopa,
+    Level& level,
+    float deltaTime
+)
+{
+    float previousX = koopa.body.x;
+    koopa.body.x += koopa.velocity.x * deltaTime;
+
+    for (const Rectangle& tile : GetNearbySolidTiles(level, koopa.body))
+    {
+        if (!CheckCollisionRecs(koopa.body, tile))
+        {
+            continue;
+        }
+
+        int tileColumn =
+            static_cast<int>(tile.x / tileSize);
+
+        int tileRow =
+            static_cast<int>(tile.y / tileSize);
+
+        if (
+            koopa.shelled &&
+            level[tileRow][tileColumn] == 'B'
+        )
+        {
+            level[tileRow][tileColumn] = '.';
+        }
+
+        if (koopa.velocity.x > 0.0f && previousX + koopa.body.width <= tile.x)
+        {
+            koopa.body.x = tile.x - koopa.body.width;
+            koopa.velocity.x = -std::abs(koopa.velocity.x);
+            return;
+        }
+
+        if (koopa.velocity.x < 0.0f && previousX >= tile.x + tile.width)
+        {
+            koopa.body.x = tile.x + tile.width;
+            koopa.velocity.x = std::abs(koopa.velocity.x);
+            return;
+        }
+    }
+
+    if (koopa.body.x < 0.0f)
+    {
+        koopa.body.x = 0.0f;
+        koopa.velocity.x = std::abs(koopa.velocity.x);
+    }
+    else if (koopa.body.x + koopa.body.width > GetLevelWidth(level))
+    {
+        koopa.body.x = GetLevelWidth(level) - koopa.body.width;
+        koopa.velocity.x = -std::abs(koopa.velocity.x);
+    }
+}
+
+void ResolveKoopaVerticalCollisions(
+    Koopa& koopa,
+    const Level& level,
+    float deltaTime
+)
+{
+    float previousY = koopa.body.y;
+    koopa.body.y += koopa.velocity.y * deltaTime;
+    koopa.onGround = false;
+
+    for (const Rectangle& tile : GetNearbySolidTiles(level, koopa.body))
+    {
+        if (!CheckCollisionRecs(koopa.body, tile))
+        {
+            continue;
+        }
+
+        if (koopa.velocity.y > 0.0f && previousY + koopa.body.height <= tile.y)
+        {
+            koopa.body.y = tile.y - koopa.body.height;
+            koopa.velocity.y = 0.0f;
+            koopa.onGround = true;
+        }
+        else if (koopa.velocity.y < 0.0f && previousY >= tile.y + tile.height)
+        {
+            koopa.body.y = tile.y + tile.height;
+            koopa.velocity.y = 0.0f;
+        }
+    }
+}
+
+void UpdateKoopas(
+    std::vector<Koopa>& koopas,
+    Level& level,
+    float deltaTime,
+    float gravity
+)
+{
+    for (Koopa& koopa : koopas)
+    {
+        if (!koopa.alive || !koopa.spawned)
+        {
+            continue;
+        }
+
+        koopa.velocity.y += gravity * deltaTime;
+
+        if (!koopa.shelled || std::abs(koopa.velocity.x) > 1.0f)
+        {
+            ResolveKoopaHorizontalCollisions(koopa, level, deltaTime);
+        }
+
+        ResolveKoopaVerticalCollisions(koopa, level, deltaTime);
+
+        if (koopa.body.y > GetLevelHeight(level) + 200.0f)
+        {
+            koopa.alive = false;
+        }
+    }
+}
+
+void SpawnKoopasNearCamera(
+    std::vector<Koopa>& koopas,
+    const Camera2D& camera
+)
+{
+    constexpr float spawnMargin = 96.0f;
+    float cameraRight = camera.target.x + virtualWidth / (2.0f * camera.zoom);
+
+    for (Koopa& koopa : koopas)
+    {
+        if (!koopa.spawned && koopa.alive && koopa.body.x <= cameraRight + spawnMargin)
+        {
+            koopa.spawned = true;
+        }
+    }
+}
+
 // --------------------------------------------------
 // Player/Goomba interaction
 // --------------------------------------------------
@@ -785,10 +1202,236 @@ bool HandlePlayerGoombaCollisions(
 
         // The player touched the Goomba from the
         // side or underneath.
-        return true;
+        return player.invulnerabilityTimer <= 0.0f;
     }
 
     return false;
+}
+
+bool HandlePlayerKoopaCollisions(
+    Player& player,
+    std::vector<Koopa>& koopas,
+    float previousPlayerBottom
+)
+{
+    constexpr float stompTolerance = 12.0f;
+    constexpr float stompBounceSpeed = 450.0f;
+    constexpr float shellSpeed = 520.0f;
+
+    for (Koopa& koopa : koopas)
+    {
+        if (!koopa.alive || !koopa.spawned || !CheckCollisionRecs(player.body, koopa.body))
+        {
+            continue;
+        }
+
+        bool landedOnTop =
+            player.velocity.y >= 0.0f &&
+            previousPlayerBottom <= koopa.body.y + stompTolerance;
+
+        if (!koopa.shelled && landedOnTop)
+        {
+            float feet = koopa.body.y + koopa.body.height;
+            koopa.shelled = true;
+            koopa.velocity = {0.0f, 0.0f};
+            koopa.body = {koopa.body.x, feet - 32.0f, 40.0f, 32.0f};
+
+            player.body.y = koopa.body.y - player.body.height;
+            player.velocity.y = -stompBounceSpeed;
+            player.onGround = false;
+            return false;
+        }
+
+        if (!koopa.shelled)
+        {
+            return player.invulnerabilityTimer <= 0.0f;
+        }
+
+        bool shellMoving =
+            std::abs(koopa.velocity.x) > 1.0f;
+
+        if (landedOnTop)
+        {
+            player.body.y = koopa.body.y - player.body.height;
+
+            if (shellMoving)
+            {
+                // Stomping a moving shell brings it to a halt.
+                koopa.velocity.x = 0.0f;
+            }
+            else
+            {
+                // Kick away from whichever side of the shell Mario is on.
+                float playerCentre =
+                    player.body.x + player.body.width / 2.0f;
+
+                float shellCentre =
+                    koopa.body.x + koopa.body.width / 2.0f;
+
+                koopa.velocity.x =
+                    playerCentre < shellCentre
+                        ? shellSpeed
+                        : -shellSpeed;
+            }
+
+            player.velocity.y = -stompBounceSpeed;
+            player.onGround = false;
+            return false;
+        }
+
+        if (shellMoving)
+        {
+            // Any non-stomp contact with a moving shell hurts Mario.
+            return player.invulnerabilityTimer <= 0.0f;
+        }
+
+        float overlapLeft = player.body.x + player.body.width - koopa.body.x;
+        float overlapRight = koopa.body.x + koopa.body.width - player.body.x;
+        float overlapTop = player.body.y + player.body.height - koopa.body.y;
+        float overlapBottom = koopa.body.y + koopa.body.height - player.body.y;
+        float smallest = std::min({overlapLeft, overlapRight, overlapTop, overlapBottom});
+
+        if (smallest == overlapLeft)
+        {
+            player.body.x = koopa.body.x - player.body.width;
+            player.velocity.x = 0.0f;
+            koopa.velocity.x = shellSpeed;
+        }
+        else if (smallest == overlapRight)
+        {
+            player.body.x = koopa.body.x + koopa.body.width;
+            player.velocity.x = 0.0f;
+            koopa.velocity.x = -shellSpeed;
+        }
+        else if (smallest == overlapBottom)
+        {
+            player.body.y = koopa.body.y + koopa.body.height;
+            player.velocity.y = 0.0f;
+        }
+    }
+
+    return false;
+}
+
+void HandleMovingShellEnemyCollisions(
+    std::vector<Koopa>& koopas,
+    std::vector<Goomba>& goombas
+)
+{
+    for (Koopa& shell : koopas)
+    {
+        if (
+            !shell.alive ||
+            !shell.spawned ||
+            !shell.shelled ||
+            std::abs(shell.velocity.x) <= 1.0f
+        )
+        {
+            continue;
+        }
+
+        for (Goomba& goomba : goombas)
+        {
+            if (
+                goomba.alive &&
+                goomba.spawned &&
+                CheckCollisionRecs(shell.body, goomba.body)
+            )
+            {
+                goomba.alive = false;
+            }
+        }
+
+        for (Koopa& enemy : koopas)
+        {
+            if (
+                &enemy != &shell &&
+                enemy.alive &&
+                enemy.spawned &&
+                CheckCollisionRecs(shell.body, enemy.body)
+            )
+            {
+                bool enemyIsMovingShell =
+                    enemy.shelled &&
+                    std::abs(enemy.velocity.x) > 1.0f;
+
+                enemy.alive = false;
+
+                if (enemyIsMovingShell)
+                {
+                    shell.alive = false;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void HandleStationaryShellEnemyCollisions(
+    std::vector<Koopa>& koopas,
+    std::vector<Goomba>& goombas
+)
+{
+    for (Koopa& shell : koopas)
+    {
+        if (
+            !shell.alive ||
+            !shell.spawned ||
+            !shell.shelled ||
+            std::abs(shell.velocity.x) > 1.0f
+        )
+        {
+            continue;
+        }
+
+        for (Goomba& goomba : goombas)
+        {
+            if (
+                !goomba.alive ||
+                !goomba.spawned ||
+                !CheckCollisionRecs(shell.body, goomba.body)
+            )
+            {
+                continue;
+            }
+
+            if (goomba.velocity.x > 0.0f)
+            {
+                goomba.body.x = shell.body.x - goomba.body.width;
+                goomba.velocity.x = -std::abs(goomba.velocity.x);
+            }
+            else
+            {
+                goomba.body.x = shell.body.x + shell.body.width;
+                goomba.velocity.x = std::abs(goomba.velocity.x);
+            }
+        }
+
+        for (Koopa& enemy : koopas)
+        {
+            if (
+                &enemy == &shell ||
+                !enemy.alive ||
+                !enemy.spawned ||
+                enemy.shelled ||
+                !CheckCollisionRecs(shell.body, enemy.body)
+            )
+            {
+                continue;
+            }
+
+            if (enemy.velocity.x > 0.0f)
+            {
+                enemy.body.x = shell.body.x - enemy.body.width;
+                enemy.velocity.x = -std::abs(enemy.velocity.x);
+            }
+            else
+            {
+                enemy.body.x = shell.body.x + shell.body.width;
+                enemy.velocity.x = std::abs(enemy.velocity.x);
+            }
+        }
+    }
 }
 
 // --------------------------------------------------
@@ -892,11 +1535,50 @@ void DrawLevel(
                     break;
 
                 case 'Q':
+                case 'M':
                     DrawTextureAsTile(
                         textures.questionBlock,
                         destination
                     );
                     break;
+
+                case 'E':
+                    DrawTextureAsTile(
+                        textures.emptyBlock,
+                        destination
+                    );
+                    break;
+
+                case 'F':
+                {
+                    constexpr float flagScale = 3.0f;
+
+                    Rectangle source{
+                        0.0f,
+                        0.0f,
+                        static_cast<float>(textures.flag.width),
+                        static_cast<float>(textures.flag.height)
+                    };
+
+                    Rectangle flagDestination{
+                        destination.x + tileSize / 2.0f -
+                            10.5f * flagScale,
+                        destination.y + tileSize * 2.0f -
+                            textures.flag.height * flagScale,
+                        textures.flag.width * flagScale,
+                        textures.flag.height * flagScale
+                    };
+
+                    DrawTexturePro(
+                        textures.flag,
+                        source,
+                        flagDestination,
+                        {0.0f, 0.0f},
+                        0.0f,
+                        WHITE
+                    );
+                    break;
+                }
 
                 case 'S':
                     DrawTextureAsTile(
@@ -927,9 +1609,24 @@ void DrawLevel(
                 // These form the remaining solid pipe
                 // collision cells. The image is drawn by H.
                 case 'h':
-                case 'V':
                 case 'v':
                     break;
+
+                case 'V':
+                {
+                    Rectangle pipeBaseDestination{
+                        destination.x,
+                        destination.y,
+                        tileSize * 2.0f,
+                        static_cast<float>(tileSize)
+                    };
+
+                    DrawTextureAsTile(
+                        textures.pipeBase,
+                        pipeBaseDestination
+                    );
+                    break;
+                }
 
                 default:
                     break;
@@ -940,20 +1637,23 @@ void DrawLevel(
 
 void DrawPlayer(
     const Player& player,
-    const Texture2D& texture
+    const Texture2D& smallTexture,
+    const Texture2D& bigTexture
 )
 {
-    Rectangle source{
-        0.0f,
-        0.0f,
-        12.0f,
-        16.0f
-    };
+    const Texture2D& texture =
+        player.big ? bigTexture : smallTexture;
 
-    constexpr float spriteHeight = 48.0f;
+    Rectangle source = player.big
+        ? Rectangle{0.0f, 0.0f, 16.0f, 32.0f}
+        : Rectangle{0.0f, 0.0f, 12.0f, 16.0f};
 
-    constexpr float spriteWidth =
-        spriteHeight * (12.0f / 16.0f);
+    float spriteHeight =
+        player.big ? 96.0f : 48.0f;
+
+    float spriteWidth = player.big
+        ? spriteHeight * (16.0f / 32.0f)
+        : spriteHeight * (12.0f / 16.0f);
 
     Rectangle destination{
         player.body.x +
@@ -978,6 +1678,26 @@ void DrawPlayer(
     );
 }
 
+void DrawSuperMushrooms(
+    const std::vector<SuperMushroom>& mushrooms,
+    const Texture2D& texture
+)
+{
+    Rectangle source{0.0f, 0.0f, 16.0f, 16.0f};
+
+    for (const SuperMushroom& mushroom : mushrooms)
+    {
+        if (!mushroom.collected)
+        {
+            DrawTextureInsideRectangle(
+                texture,
+                source,
+                mushroom.body
+            );
+        }
+    }
+}
+
 void DrawCoins(
     const std::vector<Coin>& coins,
     const Texture2D& texture
@@ -993,6 +1713,37 @@ void DrawCoins(
     for (const Coin& coin : coins)
     {
         if (coin.collected)
+        {
+            continue;
+        }
+
+        DrawTexturePro(
+            texture,
+            source,
+            coin.body,
+            {0.0f, 0.0f},
+            0.0f,
+            WHITE
+        );
+    }
+}
+
+void DrawBlockCoins(
+    const std::vector<BlockCoin>& blockCoins,
+    const Texture2D& texture
+)
+{
+    Rectangle source{
+        0.0f,
+        0.0f,
+        static_cast<float>(texture.width),
+        static_cast<float>(texture.height)
+    };
+
+    for (const BlockCoin& coin : blockCoins)
+    {
+        // Briefly flicker as the coin pops above the used block.
+        if (std::fmod(coin.age, 0.12f) < 0.035f)
         {
             continue;
         }
@@ -1042,6 +1793,50 @@ void DrawGoomba(
         source,
         destination,
         movingRight
+    );
+}
+
+void DrawKoopa(
+    const Koopa& koopa,
+    const Texture2D& koopaTexture,
+    const Texture2D& shellTexture
+)
+{
+    if (!koopa.alive || !koopa.spawned)
+    {
+        return;
+    }
+
+    const Texture2D& texture =
+        koopa.shelled ? shellTexture : koopaTexture;
+
+    Rectangle source = koopa.shelled
+        ? Rectangle{0.0f, 0.0f, 16.0f, 14.0f}
+        : Rectangle{0.0f, 0.0f, 16.0f, 23.0f};
+
+    constexpr float spriteWidth = 48.0f;
+
+    float spriteHeight = koopa.shelled
+        ? spriteWidth * (14.0f / 16.0f)
+        : spriteWidth * (23.0f / 16.0f);
+
+    Rectangle destination{
+        koopa.body.x +
+            (koopa.body.width - spriteWidth) / 2.0f,
+
+        koopa.body.y +
+            koopa.body.height -
+            spriteHeight,
+
+        spriteWidth,
+        spriteHeight
+    };
+
+    DrawTextureInsideRectangle(
+        texture,
+        source,
+        destination,
+        !koopa.shelled && koopa.velocity.x > 0.0f
     );
 }
 
@@ -1165,9 +1960,13 @@ void RespawnPlayer(
     Camera2D& camera,
     std::vector<Coin>& coins,
     const std::vector<Coin>& initialCoins,
+    std::vector<BlockCoin>& blockCoins,
     int& coinCount,
     std::vector<Goomba>& goombas,
     const std::vector<Goomba>& initialGoombas,
+    std::vector<Koopa>& koopas,
+    const std::vector<Koopa>& initialKoopas,
+    std::vector<SuperMushroom>& mushrooms,
     float& jumpBufferTimer,
     float& coyoteTimer
 )
@@ -1181,6 +1980,8 @@ void RespawnPlayer(
 
     player.velocity = {0.0f, 0.0f};
     player.onGround = false;
+    player.big = false;
+    player.invulnerabilityTimer = 0.0f;
 
     jumpBufferTimer = 0.0f;
     coyoteTimer = 0.0f;
@@ -1191,9 +1992,12 @@ void RespawnPlayer(
     };
 
     coins = initialCoins;
+    blockCoins.clear();
     coinCount = 0;
 
     goombas = initialGoombas;
+    koopas = initialKoopas;
+    mushrooms.clear();
 }
 
 // --------------------------------------------------
@@ -1212,26 +2016,34 @@ int main()
     constexpr float jumpSpeed = 850.0f;
     constexpr float gravity = 1800.0f;
 
+    // SMB-style jumps use a lighter force while rising and a
+    // substantially stronger force after the apex. Releasing jump
+    // early applies the strongest force, producing the original
+    // game's variable-height, snappy jump arc.
+    constexpr float risingGravity = 1550.0f;
+    constexpr float fallingGravity = 2850.0f;
+    constexpr float releasedJumpGravity = 3600.0f;
+
     constexpr float jumpBufferDuration = 0.12f;
     constexpr float coyoteTimeDuration = 0.06f;
 
     Level level{
-        "........................................................................................................................",
-        "........................................................................................................................",
-        "........................................................................................................................",
-        ".................................................C.C.C..................................................................",
-        "....................BBBBQBBBB.......................................................C....................................",
-        "..........................................C.C.C.................................................BBBB.....................",
-        ".........Q...B...Q......................................................................................................",
-        "..............................................................C.C.C.....................................................",
-        "............................BBBBB..................................................QBBBBQ.................................",
-        "........................................................................................................................",
-        ".P.........C.C.C....................Hh.........................G......................................Hh................",
-        "........BBBBQBBBB...................Vv...............................................SSS..............Vv....G...........",
-        "##################..############################..##############################....SSSS..........#######################",
-        "##################..############################..##############################...SSSSS..........#######################",
-        "##################..############################..##############################...SSSSS..........#######################",
-        "##################..############################..##############################...SSSSS..........#######################"
+        "..........................................................................................................................................................................................................",
+        "..........................................................................................................................................................................................................",
+        "..........................................................................................................................................................................................................",
+        "..................................................................................G.......................................................................................................................",
+        "......................Q.........................................................BBBBBBBB...BBBQ..............M...........BBB....BQQB........................................................SS............",
+        "...........................................................................................................................................................................................SSS............",
+        "...............................................................................G..........................................................................................................SSSS............",
+        ".........................................................................................................................................................................................SSSSS............",
+        "................Q...BMBQB.....................Hh.........Hh..................BMB..............C.....BB....Q..Q..Q.....B..........BB......S..S..........SS..S............BBQB............SSSSSS............",
+        "......................................Hh......Vv.........Vv.............................................................................SS..SS........SSS..SS..........................SSSSSSS............",
+        "............................Hh........Vv......Vv.........Vv............................................................................SSS..SSS......SSSS..SSS.....Hh..............Hh.SSSSSSSS........F...",
+        "...P.................G......Vv........Vv.G....Vv.....G.G.Vv....................................G.G........K.................GG.G.G....SSSS..SSSS....SSSSS..SSSS....Vv.........GG...VvSSSSSSSSS........S...",
+        "#####################################################################..###############...################################################################..###############################################",
+        "#####################################################################..###############...################################################################..###############################################",
+        "#####################################################################..###############...################################################################..###############################################",
+        "#####################################################################..###############...################################################################..###############################################"
     };
 
     NormaliseLevel(level);
@@ -1267,11 +2079,18 @@ int main()
         LoadTexture("resources/Blocks/Ground.png"),
         LoadTexture("resources/Blocks/Brick.png"),
         LoadTexture("resources/Blocks/Q_Block.png"),
+        LoadTexture("resources/Blocks/Empty_Block.png"),
         LoadTexture("resources/Blocks/Stair_Block.png"),
         LoadTexture("resources/Pipe.png"),
+        LoadTexture("resources/Pipe_Base.png"),
         LoadTexture("resources/Coin.png"),
         LoadTexture("resources/Mario/Small_Mario.png"),
-        LoadTexture("resources/Enemies/Goomba.png")
+        LoadTexture("resources/Mario/Super_Mario.png"),
+        LoadTexture("resources/Enemies/Goomba.png"),
+        LoadTexture("resources/Enemies/Green_Koopa.png"),
+        LoadTexture("resources/Green_Shell.png"),
+        LoadTexture("resources/Items/Super_Mushroom.png"),
+        LoadTexture("resources/Flag.png")
     };
 
     SetTextureFilter(
@@ -1289,6 +2108,8 @@ int main()
         TEXTURE_FILTER_POINT
     );
 
+    SetTextureFilter(textures.emptyBlock, TEXTURE_FILTER_POINT);
+
     SetTextureFilter(
         textures.stairBlock,
         TEXTURE_FILTER_POINT
@@ -1298,6 +2119,8 @@ int main()
         textures.pipe,
         TEXTURE_FILTER_POINT
     );
+
+    SetTextureFilter(textures.pipeBase, TEXTURE_FILTER_POINT);
 
     SetTextureFilter(
         textures.coin,
@@ -1309,15 +2132,29 @@ int main()
         TEXTURE_FILTER_POINT
     );
 
+    SetTextureFilter(textures.superMario, TEXTURE_FILTER_POINT);
+
     SetTextureFilter(
         textures.goomba,
         TEXTURE_FILTER_POINT
     );
 
+    SetTextureFilter(textures.koopa, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.greenShell, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superMushroom, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.flag, TEXTURE_FILTER_POINT);
+
     if (
         textures.ground.id == 0 ||
+        textures.pipeBase.id == 0 ||
+        textures.emptyBlock.id == 0 ||
         textures.player.id == 0 ||
-        textures.goomba.id == 0
+        textures.superMario.id == 0 ||
+        textures.goomba.id == 0 ||
+        textures.koopa.id == 0 ||
+        textures.greenShell.id == 0 ||
+        textures.superMushroom.id == 0 ||
+        textures.flag.id == 0
     )
     {
         TraceLog(
@@ -1326,8 +2163,15 @@ int main()
         );
 
         UnloadTexture(textures.ground);
+        UnloadTexture(textures.pipeBase);
+        UnloadTexture(textures.emptyBlock);
         UnloadTexture(textures.player);
+        UnloadTexture(textures.superMario);
         UnloadTexture(textures.goomba);
+        UnloadTexture(textures.koopa);
+        UnloadTexture(textures.greenShell);
+        UnloadTexture(textures.superMushroom);
+        UnloadTexture(textures.flag);
 
         CloseWindow();
         return 1;
@@ -1355,14 +2199,20 @@ int main()
             44.0f
         },
         {0.0f, 0.0f},
-        false
+        false,
+        false,
+        0.0f
     };
+
+    std::vector<SuperMushroom> mushrooms;
 
     std::vector<Coin> initialCoins =
         FindCoinSpawns(level);
 
     std::vector<Coin> coins =
         initialCoins;
+
+    std::vector<BlockCoin> blockCoins;
 
     int coinCount = 0;
 
@@ -1371,6 +2221,12 @@ int main()
 
     std::vector<Goomba> goombas =
         initialGoombas;
+
+    std::vector<Koopa> initialKoopas =
+        FindKoopaSpawns(level);
+
+    std::vector<Koopa> koopas =
+        initialKoopas;
 
     Camera2D camera{};
 
@@ -1397,6 +2253,11 @@ int main()
                 GetFrameTime(),
                 0.05f
             );
+
+        player.invulnerabilityTimer = std::max(
+            0.0f,
+            player.invulnerabilityTimer - deltaTime
+        );
 
         bool wasOnGround =
             player.onGround;
@@ -1580,8 +2441,21 @@ int main()
         // Player physics
         // --------------------------------
 
+        bool jumpHeld =
+            IsKeyDown(KEY_SPACE) ||
+            IsKeyDown(KEY_W);
+
+        float playerGravity = fallingGravity;
+
+        if (player.velocity.y < 0.0f)
+        {
+            playerGravity = jumpHeld
+                ? risingGravity
+                : releasedJumpGravity;
+        }
+
         player.velocity.y +=
-            gravity * deltaTime;
+            playerGravity * deltaTime;
 
         ResolvePlayerHorizontalCollisions(
             player,
@@ -1592,8 +2466,13 @@ int main()
         ResolvePlayerVerticalCollisions(
             player,
             level,
+            mushrooms,
+            blockCoins,
+            coinCount,
             deltaTime
         );
+
+        UpdateBlockCoins(blockCoins, deltaTime);
 
         if (
             player.onGround &&
@@ -1617,6 +2496,8 @@ int main()
 			goombas,
 			camera
 		);
+
+        SpawnKoopasNearCamera(koopas, camera);
 		
         UpdateGoombas(
             goombas,
@@ -1625,12 +2506,64 @@ int main()
             gravity
         );
 
+        UpdateKoopas(koopas, level, deltaTime, gravity);
+
+        UpdateSuperMushrooms(
+            mushrooms,
+            level,
+            deltaTime,
+            gravity
+        );
+
+        CollectSuperMushrooms(player, mushrooms);
+
+        HandleStationaryShellEnemyCollisions(
+            koopas,
+            goombas
+        );
+
+        HandleMovingShellEnemyCollisions(
+            koopas,
+            goombas
+        );
+
         bool playerHitGoomba =
             HandlePlayerGoombaCollisions(
                 player,
                 goombas,
                 previousPlayerBottom
             );
+
+        bool playerHitKoopa =
+            HandlePlayerKoopaCollisions(
+                player,
+                koopas,
+                previousPlayerBottom
+            );
+
+        bool playerHitEnemy =
+            playerHitGoomba || playerHitKoopa;
+
+        if (playerHitEnemy && player.big)
+        {
+            constexpr float damageInvulnerability = 1.5f;
+
+            float bottom =
+                player.body.y + player.body.height;
+
+            float centre =
+                player.body.x + player.body.width / 2.0f;
+
+            player.body.width = 32.0f;
+            player.body.height = 44.0f;
+            player.body.x = centre - player.body.width / 2.0f;
+            player.body.y = bottom - player.body.height;
+            player.big = false;
+            player.invulnerabilityTimer =
+                damageInvulnerability;
+
+            playerHitEnemy = false;
+        }
 
         // --------------------------------
         // Respawn
@@ -1641,7 +2574,10 @@ int main()
             GetLevelHeight(level) +
                 200.0f;
 
-        if (playerFell || playerHitGoomba)
+        if (
+            playerFell ||
+            playerHitEnemy
+        )
         {
             RespawnPlayer(
                 player,
@@ -1649,9 +2585,13 @@ int main()
                 camera,
                 coins,
                 initialCoins,
+                blockCoins,
                 coinCount,
                 goombas,
                 initialGoombas,
+                koopas,
+                initialKoopas,
+                mushrooms,
                 jumpBufferTimer,
                 coyoteTimer
             );
@@ -1679,20 +2619,6 @@ int main()
             player.velocity.x = 0.0f;
         }
 
-        // Remove enemies left behind by the camera.
-        for (Goomba& goomba : goombas)
-        {
-            if (
-                goomba.alive &&
-                goomba.body.x +
-                    goomba.body.width <
-                cameraLeft
-            )
-            {
-                goomba.alive = false;
-            }
-        }
-
         // --------------------------------
         // Draw virtual game screen
         // --------------------------------
@@ -1702,6 +2628,12 @@ int main()
         ClearBackground(SKYBLUE);
 
         BeginMode2D(camera);
+
+        // Draw items behind tiles so mushrooms rise out of blocks.
+        DrawSuperMushrooms(
+            mushrooms,
+            textures.superMushroom
+        );
 
         DrawLevel(
             level,
@@ -1713,6 +2645,11 @@ int main()
             textures.coin
         );
 
+        DrawBlockCoins(
+            blockCoins,
+            textures.coin
+        );
+
         for (const Goomba& goomba : goombas)
         {
             DrawGoomba(
@@ -1721,9 +2658,20 @@ int main()
             );
         }
 
+
+        for (const Koopa& koopa : koopas)
+        {
+            DrawKoopa(
+                koopa,
+                textures.koopa,
+                textures.greenShell
+            );
+        }
+
         DrawPlayer(
             player,
-            textures.player
+            textures.player,
+            textures.superMario
         );
 
         if (IsKeyDown(KEY_F1))
@@ -1743,6 +2691,15 @@ int main()
                         2.0f,
                         RED
                     );
+                }
+            }
+
+
+            for (const Koopa& koopa : koopas)
+            {
+                if (koopa.alive && koopa.spawned)
+                {
+                    DrawRectangleLinesEx(koopa.body, 2.0f, GREEN);
                 }
             }
         }
@@ -1832,11 +2789,18 @@ int main()
     UnloadTexture(textures.ground);
     UnloadTexture(textures.brick);
     UnloadTexture(textures.questionBlock);
+    UnloadTexture(textures.emptyBlock);
     UnloadTexture(textures.stairBlock);
     UnloadTexture(textures.pipe);
+    UnloadTexture(textures.pipeBase);
     UnloadTexture(textures.coin);
     UnloadTexture(textures.player);
+    UnloadTexture(textures.superMario);
     UnloadTexture(textures.goomba);
+    UnloadTexture(textures.koopa);
+    UnloadTexture(textures.greenShell);
+    UnloadTexture(textures.superMushroom);
+    UnloadTexture(textures.flag);
 
     UnloadRenderTexture(gameTexture);
     CloseWindow();
