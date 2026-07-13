@@ -76,6 +76,8 @@ struct FireBall
     Vector2 velocity;
     bool alive;
     float rotation;
+    bool impacting;
+    float impactTimer;
 };
 
 struct Goomba
@@ -207,6 +209,14 @@ struct GameTextures
     Texture2D coinFlash2;
     Texture2D coinFlash3;
     Texture2D coinFlash4;
+    Texture2D bigHill;
+    Texture2D smallHill;
+    Texture2D singleBush;
+    Texture2D doubleBush;
+    Texture2D tripleBush;
+    Texture2D singleCloud;
+    Texture2D doubleCloud;
+    Texture2D tripleCloud;
     Texture2D player;
     Texture2D smallMarioWalk1;
     Texture2D smallMarioWalk2;
@@ -247,7 +257,11 @@ struct GameTextures
     Texture2D star4;
     Texture2D starMario;
     Texture2D fireBall;
+    Texture2D fireBallHit1;
+    Texture2D fireBallHit2;
+    Texture2D fireBallHit3;
     Texture2D flag;
+    Texture2D title;
 };
 
 using Level = std::vector<std::string>;
@@ -565,6 +579,33 @@ void UpdateBrokenBrickAnimations(float deltaTime)
         [maximumLifetime](const BrokenBrickAnimation& animation)
         {
             return animation.age >= maximumLifetime;
+        }
+    );
+}
+
+bool WasBrickJustBrokenAt(int row, int column)
+{
+    // A broken brick should not immediately become a "helpful" opening for
+    // ceiling corner correction.  Keep it logically occupied for the short
+    // upward rebound caused by the same hit; later jumps can use the gap.
+    constexpr float suppressionDuration = 0.3f;
+
+    return std::ranges::any_of(
+        brokenBrickAnimations,
+        [row, column, suppressionDuration](
+            const BrokenBrickAnimation& animation
+        )
+        {
+            int brokenColumn = static_cast<int>(std::lround(
+                animation.originalBlock.x / tileSize
+            ));
+            int brokenRow = static_cast<int>(std::lround(
+                animation.originalBlock.y / tileSize
+            ));
+
+            return animation.age < suppressionDuration &&
+                brokenRow == row &&
+                brokenColumn == column;
         }
     );
 }
@@ -1106,6 +1147,14 @@ void CollectSuperStars(Player& player, std::vector<SuperStar>& stars)
     }
 }
 
+void StartFireBallImpact(FireBall& fireBall)
+{
+    fireBall.impacting = true;
+    fireBall.impactTimer = 0.0f;
+    fireBall.velocity = {0.0f, 0.0f};
+    fireBall.rotation = 0.0f;
+}
+
 void UpdateFireBalls(
     std::vector<FireBall>& fireBalls,
     const Level& level,
@@ -1118,11 +1167,24 @@ void UpdateFireBalls(
     constexpr float fireBallGravity = 3375.0f;
     constexpr float maximumFallSpeed = 540.0f;
     constexpr float bounceSpeed = 540.0f;
+    constexpr float impactDuration = 12.0f / nesNtscFrameRate;
 
     for (FireBall& fireBall : fireBalls)
     {
         if (!fireBall.alive)
         {
+            continue;
+        }
+
+        if (fireBall.impacting)
+        {
+            fireBall.impactTimer += deltaTime;
+
+            if (fireBall.impactTimer >= impactDuration)
+            {
+                fireBall.alive = false;
+            }
+
             continue;
         }
 
@@ -1144,12 +1206,13 @@ void UpdateFireBalls(
 
             if (hitFromSide)
             {
-                fireBall.alive = false;
+                fireBall.body.x = previousX;
+                StartFireBallImpact(fireBall);
                 break;
             }
         }
 
-        if (!fireBall.alive)
+        if (fireBall.impacting)
         {
             continue;
         }
@@ -1187,9 +1250,15 @@ void UpdateFireBalls(
                 previousY >= tile.y + tile.height
             )
             {
-                fireBall.alive = false;
+                fireBall.body.y = previousY;
+                StartFireBallImpact(fireBall);
                 break;
             }
+        }
+
+        if (fireBall.impacting)
+        {
+            continue;
         }
 
         for (Goomba& goomba : goombas)
@@ -1202,7 +1271,7 @@ void UpdateFireBalls(
             )
             {
                 KillGoomba(goomba);
-                fireBall.alive = false;
+                StartFireBallImpact(fireBall);
                 break;
             }
         }
@@ -1210,7 +1279,7 @@ void UpdateFireBalls(
         for (Koopa& koopa : koopas)
         {
             if (
-                fireBall.alive &&
+                !fireBall.impacting &&
                 koopa.alive &&
                 !koopa.dying &&
                 koopa.spawned &&
@@ -1218,9 +1287,14 @@ void UpdateFireBalls(
             )
             {
                 KillKoopa(koopa);
-                fireBall.alive = false;
+                StartFireBallImpact(fireBall);
                 break;
             }
+        }
+
+        if (fireBall.impacting)
+        {
+            continue;
         }
 
         float halfVisibleWidth =
@@ -1678,12 +1752,20 @@ void ResolvePlayerVerticalCollisions(
                     level,
                     ceilingRow,
                     ceilingColumn - 1
+                ) &&
+                !WasBrickJustBrokenAt(
+                    ceilingRow,
+                    ceilingColumn - 1
                 );
 
             bool gapOnRight =
                 ceilingColumn + 1 < GetLevelColumns(level) &&
                 !IsSolidTile(
                     level,
+                    ceilingRow,
+                    ceilingColumn + 1
+                ) &&
+                !WasBrickJustBrokenAt(
                     ceilingRow,
                     ceilingColumn + 1
                 );
@@ -2933,6 +3015,132 @@ void DrawLevel(
     }
 }
 
+void DrawBackgroundScenery(
+    const Level& level,
+    const GameTextures& textures
+)
+{
+    // SMB's first background-scene pattern repeats every 48 original
+    // 16-pixel columns.  This clone omits the NES HUD row, so reference-map
+    // Y coordinates are shifted upward by one original tile.
+    constexpr float spriteScale = 3.0f;
+    constexpr float sceneryCycleWidth = 768.0f * spriteScale;
+    constexpr float verticalMapOffset = 16.0f;
+    constexpr float horizontalWorldOffset = 8.0f * tileSize;
+
+    auto drawScenerySprite = [spriteScale, horizontalWorldOffset](
+        const Texture2D& texture,
+        float sourceX,
+        float sourceY
+    )
+    {
+        Rectangle source{
+            0.0f,
+            0.0f,
+            static_cast<float>(texture.width),
+            static_cast<float>(texture.height)
+        };
+        Rectangle destination{
+            sourceX * spriteScale + horizontalWorldOffset,
+            (sourceY - verticalMapOffset) * spriteScale,
+            texture.width * spriteScale,
+            texture.height * spriteScale
+        };
+
+        DrawTexturePro(
+            texture,
+            source,
+            destination,
+            {0.0f, 0.0f},
+            0.0f,
+            WHITE
+        );
+    };
+
+    for (
+        float cycleX = 0.0f;
+        cycleX < GetLevelWidth(level);
+        cycleX += sceneryCycleWidth
+    )
+    {
+        float sourceCycleX = cycleX / spriteScale;
+
+        drawScenerySprite(textures.bigHill, sourceCycleX, 173.0f);
+        drawScenerySprite(
+            textures.smallHill,
+            sourceCycleX + 256.0f,
+            189.0f
+        );
+
+        drawScenerySprite(
+            textures.tripleBush,
+            sourceCycleX + 184.0f,
+            192.0f
+        );
+        drawScenerySprite(
+            textures.singleBush,
+            sourceCycleX + 376.0f,
+            192.0f
+        );
+        drawScenerySprite(
+            textures.doubleBush,
+            sourceCycleX + 664.0f,
+            192.0f
+        );
+
+        drawScenerySprite(
+            textures.singleCloud,
+            sourceCycleX + 136.0f,
+            48.0f
+        );
+        drawScenerySprite(
+            textures.singleCloud,
+            sourceCycleX + 312.0f,
+            32.0f
+        );
+        drawScenerySprite(
+            textures.tripleCloud,
+            sourceCycleX + 440.0f,
+            48.0f
+        );
+        drawScenerySprite(
+            textures.doubleCloud,
+            sourceCycleX + 584.0f,
+            32.0f
+        );
+    }
+}
+
+void DrawOpeningTitle(const Texture2D& texture)
+{
+    constexpr float scale = 3.0f;
+    float width = texture.width * scale;
+    float height = texture.height * scale;
+
+    Rectangle source{
+        0.0f,
+        0.0f,
+        static_cast<float>(texture.width),
+        static_cast<float>(texture.height)
+    };
+
+    Rectangle destination{
+        (virtualWidth - width) / 2.0f,
+        (virtualHeight - height) / 2.0f - tileSize,
+        width,
+        height
+    };
+
+    DrawTexturePro(
+        texture,
+        source,
+        destination,
+        {0.0f, 0.0f},
+        0.0f,
+        WHITE
+    );
+}
+
 void DrawBrokenBrickAnimations(
     const std::vector<BrokenBrickAnimation>& animations,
     const Texture2D& brokenBrick,
@@ -3163,13 +3371,56 @@ void DrawSuperStars(
 
 void DrawFireBalls(
     const std::vector<FireBall>& fireBalls,
-    const Texture2D& texture
+    const Texture2D& texture,
+    const Texture2D& hit1,
+    const Texture2D& hit2,
+    const Texture2D& hit3
 )
 {
     Rectangle source{0.0f, 0.0f, 8.0f, 8.0f};
+    const Texture2D* impactFrames[] = {&hit1, &hit2, &hit3};
 
     for (const FireBall& fireBall : fireBalls)
     {
+        if (fireBall.impacting)
+        {
+            int impactFrame = std::min(
+                2,
+                static_cast<int>(
+                    fireBall.impactTimer * nesNtscFrameRate / 4.0f
+                )
+            );
+
+            const Texture2D& impactTexture = *impactFrames[impactFrame];
+            constexpr float impactSize = 16.0f * 3.0f;
+
+            Rectangle impactSource{
+                0.0f,
+                0.0f,
+                static_cast<float>(impactTexture.width),
+                static_cast<float>(impactTexture.height)
+            };
+
+            Rectangle impactDestination{
+                fireBall.body.x + fireBall.body.width / 2.0f -
+                    impactSize / 2.0f,
+                fireBall.body.y + fireBall.body.height / 2.0f -
+                    impactSize / 2.0f,
+                impactSize,
+                impactSize
+            };
+
+            DrawTexturePro(
+                impactTexture,
+                impactSource,
+                impactDestination,
+                {0.0f, 0.0f},
+                0.0f,
+                WHITE
+            );
+            continue;
+        }
+
         Rectangle destination{
             fireBall.body.x + fireBall.body.width / 2.0f,
             fireBall.body.y + fireBall.body.height / 2.0f,
@@ -3704,6 +3955,14 @@ int main()
         LoadTexture("resources/Coin_Flash_2.png"),
         LoadTexture("resources/Coin_Flash_3.png"),
         LoadTexture("resources/Coin_Flash_4.png"),
+        LoadTexture("resources/Background/Big_Hill.png"),
+        LoadTexture("resources/Background/Small_Hill.png"),
+        LoadTexture("resources/Background/Single_Bush.png"),
+        LoadTexture("resources/Background/Double_Bush.png"),
+        LoadTexture("resources/Background/Triple_Bush.png"),
+        LoadTexture("resources/Background/Single_Cloud.png"),
+        LoadTexture("resources/Background/Double_Cloud.png"),
+        LoadTexture("resources/Background/Triple_Cloud.png"),
         LoadTexture("resources/Mario/Small_Mario.png"),
         LoadTexture("resources/Mario/Small_Mario_Walk_1.png"),
         LoadTexture("resources/Mario/Small_Mario_Walk_2.png"),
@@ -3744,7 +4003,11 @@ int main()
         LoadTexture("resources/Items/Star_4.png"),
         starMarioTexture,
         LoadTexture("resources/Fire_Ball.png"),
-        LoadTexture("resources/Flag.png")
+        LoadTexture("resources/Fire_Ball_Hit_1.png"),
+        LoadTexture("resources/Fire_Ball_Hit_2.png"),
+        LoadTexture("resources/Fire_Ball_Hit_3.png"),
+        LoadTexture("resources/Flag.png"),
+        LoadTexture("resources/title.png")
     };
 
     SetTextureFilter(
@@ -3786,6 +4049,14 @@ int main()
     SetTextureFilter(textures.coinFlash2, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.coinFlash3, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.coinFlash4, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.bigHill, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallHill, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.singleBush, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.doubleBush, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.tripleBush, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.singleCloud, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.doubleCloud, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.tripleCloud, TEXTURE_FILTER_POINT);
 
     SetTextureFilter(
         textures.player,
@@ -3838,7 +4109,11 @@ int main()
     SetTextureFilter(textures.star4, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.starMario, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.fireBall, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireBallHit1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireBallHit2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireBallHit3, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.flag, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.title, TEXTURE_FILTER_POINT);
 
     if (
         textures.ground.id == 0 ||
@@ -3884,6 +4159,14 @@ int main()
         textures.coinFlash2.id == 0 ||
         textures.coinFlash3.id == 0 ||
         textures.coinFlash4.id == 0 ||
+        textures.bigHill.id == 0 ||
+        textures.smallHill.id == 0 ||
+        textures.singleBush.id == 0 ||
+        textures.doubleBush.id == 0 ||
+        textures.tripleBush.id == 0 ||
+        textures.singleCloud.id == 0 ||
+        textures.doubleCloud.id == 0 ||
+        textures.tripleCloud.id == 0 ||
         textures.fireFlower1.id == 0 ||
         textures.fireFlower2.id == 0 ||
         textures.fireFlower3.id == 0 ||
@@ -3894,7 +4177,11 @@ int main()
         textures.star4.id == 0 ||
         textures.starMario.id == 0 ||
         textures.fireBall.id == 0 ||
-        textures.flag.id == 0
+        textures.fireBallHit1.id == 0 ||
+        textures.fireBallHit2.id == 0 ||
+        textures.fireBallHit3.id == 0 ||
+        textures.flag.id == 0 ||
+        textures.title.id == 0
     )
     {
         TraceLog(
@@ -3945,6 +4232,14 @@ int main()
         UnloadTexture(textures.coinFlash2);
         UnloadTexture(textures.coinFlash3);
         UnloadTexture(textures.coinFlash4);
+        UnloadTexture(textures.bigHill);
+        UnloadTexture(textures.smallHill);
+        UnloadTexture(textures.singleBush);
+        UnloadTexture(textures.doubleBush);
+        UnloadTexture(textures.tripleBush);
+        UnloadTexture(textures.singleCloud);
+        UnloadTexture(textures.doubleCloud);
+        UnloadTexture(textures.tripleCloud);
         UnloadTexture(textures.fireFlower1);
         UnloadTexture(textures.fireFlower2);
         UnloadTexture(textures.fireFlower3);
@@ -3956,7 +4251,11 @@ int main()
         UnloadTexture(textures.starMario);
         UnloadImage(starMarioImage);
         UnloadTexture(textures.fireBall);
+        UnloadTexture(textures.fireBallHit1);
+        UnloadTexture(textures.fireBallHit2);
+        UnloadTexture(textures.fireBallHit3);
         UnloadTexture(textures.flag);
+        UnloadTexture(textures.title);
 
         CloseWindow();
         return 1;
@@ -4250,6 +4549,8 @@ int main()
                     540.0f
                 },
                 true,
+                0.0f,
+                false,
                 0.0f
             });
 
@@ -4766,6 +5067,12 @@ int main()
 
         BeginMode2D(camera);
 
+        DrawBackgroundScenery(level, textures);
+
+        // Keep the logo in the opening area's world space so it begins
+        // centred on screen, then naturally scrolls away with the level.
+        DrawOpeningTitle(textures.title);
+
         // Draw items behind tiles so mushrooms rise out of blocks.
         DrawSuperMushrooms(
             mushrooms,
@@ -4843,7 +5150,10 @@ int main()
 
         DrawFireBalls(
             fireBalls,
-            textures.fireBall
+            textures.fireBall,
+            textures.fireBallHit1,
+            textures.fireBallHit2,
+            textures.fireBallHit3
         );
 
         DrawPlayer(
@@ -4982,6 +5292,14 @@ int main()
     UnloadTexture(textures.coinFlash2);
     UnloadTexture(textures.coinFlash3);
     UnloadTexture(textures.coinFlash4);
+    UnloadTexture(textures.bigHill);
+    UnloadTexture(textures.smallHill);
+    UnloadTexture(textures.singleBush);
+    UnloadTexture(textures.doubleBush);
+    UnloadTexture(textures.tripleBush);
+    UnloadTexture(textures.singleCloud);
+    UnloadTexture(textures.doubleCloud);
+    UnloadTexture(textures.tripleCloud);
     UnloadTexture(textures.player);
     UnloadTexture(textures.smallMarioWalk1);
     UnloadTexture(textures.smallMarioWalk2);
@@ -5023,7 +5341,11 @@ int main()
     UnloadTexture(textures.starMario);
     UnloadImage(starMarioImage);
     UnloadTexture(textures.fireBall);
+    UnloadTexture(textures.fireBallHit1);
+    UnloadTexture(textures.fireBallHit2);
+    UnloadTexture(textures.fireBallHit3);
     UnloadTexture(textures.flag);
+    UnloadTexture(textures.title);
 
     UnloadRenderTexture(gameTexture);
     CloseWindow();
