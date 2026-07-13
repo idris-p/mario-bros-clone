@@ -16,6 +16,12 @@ namespace std {
     }
 }
 
+constexpr float nesNtscFrameRate = 60.0988f;
+constexpr float koopaShellReviveDuration =
+    16.0f * 21.0f / nesNtscFrameRate;
+constexpr float koopaShellWakeDuration =
+    4.0f * 21.0f / nesNtscFrameRate;
+
 struct Player
 {
     Rectangle body;
@@ -32,6 +38,9 @@ struct Player
     int walkAnimationFrame;
     float fireThrowTimer;
     bool skidding;
+    bool star;
+    float starTimer;
+    float damageTransformTimer;
 };
 
 struct SuperMushroom
@@ -47,6 +56,15 @@ struct SuperMushroom
 struct FireFlower
 {
     Rectangle body;
+    float targetY;
+    bool emerging;
+    bool collected;
+};
+
+struct SuperStar
+{
+    Rectangle body;
+    Vector2 velocity;
     float targetY;
     bool emerging;
     bool collected;
@@ -68,6 +86,8 @@ struct Goomba
     bool alive;
     bool spawned;
     bool dying;
+    bool stomped;
+    float deathTimer;
 };
 
 struct Koopa
@@ -79,6 +99,7 @@ struct Koopa
     bool spawned;
     bool shelled;
     bool dying;
+    float shellReviveTimer;
 };
 
 void KillGoomba(Goomba& goomba)
@@ -86,6 +107,7 @@ void KillGoomba(Goomba& goomba)
     if (goomba.alive && !goomba.dying)
     {
         goomba.dying = true;
+        goomba.stomped = false;
         goomba.velocity = {0.0f, -240.0f};
     }
 }
@@ -110,6 +132,9 @@ void KillPlayer(Player& player)
         player.ducking = false;
         player.fireThrowTimer = 0.0f;
         player.skidding = false;
+        player.star = false;
+        player.starTimer = 0.0f;
+        player.damageTransformTimer = 0.0f;
     }
 }
 
@@ -137,16 +162,51 @@ struct BlockBump
 
 std::vector<BlockBump> blockBumps;
 
+struct BrickFragment
+{
+    Vector2 position;
+    Vector2 velocity;
+};
+
+struct BrokenBrickAnimation
+{
+    Rectangle originalBlock;
+    BrickFragment fragments[4];
+    float age;
+};
+
+std::vector<BrokenBrickAnimation> brokenBrickAnimations;
+
+struct MultiCoinBlock
+{
+    int row;
+    int column;
+    int coinsRemaining;
+    float timeRemaining;
+    bool finalCoinOnly;
+};
+
+std::vector<MultiCoinBlock> multiCoinBlocks;
+
 struct GameTextures
 {
     Texture2D ground;
     Texture2D brick;
-    Texture2D questionBlock;
+    Texture2D brokenBrick;
+    Texture2D brickPiece1;
+    Texture2D brickPiece2;
+    Texture2D questionBlock1;
+    Texture2D questionBlock2;
+    Texture2D questionBlock3;
     Texture2D emptyBlock;
     Texture2D stairBlock;
     Texture2D pipe;
     Texture2D pipeBase;
     Texture2D coin;
+    Texture2D coinFlash1;
+    Texture2D coinFlash2;
+    Texture2D coinFlash3;
+    Texture2D coinFlash4;
     Texture2D player;
     Texture2D smallMarioWalk1;
     Texture2D smallMarioWalk2;
@@ -170,11 +230,22 @@ struct GameTextures
     Texture2D fireMarioSwitch;
     Texture2D fireMarioThrow;
     Texture2D goomba;
+    Texture2D goombaDead;
     Texture2D koopa;
+    Texture2D koopaWalk;
     Texture2D greenShell;
+    Texture2D greenShellWake;
     Texture2D superMushroom;
     Texture2D oneUpMushroom;
-    Texture2D fireFlower;
+    Texture2D fireFlower1;
+    Texture2D fireFlower2;
+    Texture2D fireFlower3;
+    Texture2D fireFlower4;
+    Texture2D star1;
+    Texture2D star2;
+    Texture2D star3;
+    Texture2D star4;
+    Texture2D starMario;
     Texture2D fireBall;
     Texture2D flag;
 };
@@ -279,9 +350,11 @@ bool IsSolidTile(
     return
         tile == '#' ||
         tile == 'B' ||
+        tile == 'N' ||
         tile == 'Q' ||
         tile == 'M' ||
         tile == 'A' ||
+        tile == 'T' ||
         tile == 'E' ||
         tile == 'S' ||
         tile == 'H' ||
@@ -331,6 +404,7 @@ void UpdateBlockBumps(
     float deltaTime,
     std::vector<SuperMushroom>& mushrooms,
     std::vector<FireFlower>& fireFlowers,
+    std::vector<SuperStar>& stars,
     std::vector<Goomba>& goombas,
     std::vector<Koopa>& koopas
 )
@@ -400,6 +474,14 @@ void UpdateBlockBumps(
             }
         }
 
+        for (SuperStar& star : stars)
+        {
+            if (!star.collected && !star.emerging)
+            {
+                carryBody(star.body);
+            }
+        }
+
         for (Goomba& goomba : goombas)
         {
             if (goomba.alive && !goomba.dying && goomba.spawned)
@@ -422,6 +504,67 @@ void UpdateBlockBumps(
         [bumpDuration](const BlockBump& bump)
         {
             return bump.age >= bumpDuration;
+        }
+    );
+}
+
+void StartBrokenBrickAnimation(const Rectangle& block)
+{
+    // Original units, scaled from the NES's 16-pixel tile to 48 pixels:
+    // horizontal speed is 1 px/frame, while the two rows launch at
+    // 6 px/frame and 4 px/frame respectively.
+    constexpr float horizontalSpeed = 3.0f * nesNtscFrameRate;
+    constexpr float upperLaunchSpeed = -6.0f * 3.0f * nesNtscFrameRate;
+    constexpr float lowerLaunchSpeed = -4.0f * 3.0f * nesNtscFrameRate;
+    constexpr float rightFragmentOffset = 6.0f * 3.0f;
+    constexpr float lowerFragmentOffset = 8.0f * 3.0f;
+
+    brokenBrickAnimations.push_back({
+        block,
+        {
+            {{block.x, block.y}, {-horizontalSpeed, upperLaunchSpeed}},
+            {{block.x + rightFragmentOffset, block.y},
+                {horizontalSpeed, upperLaunchSpeed}},
+            {{block.x, block.y + lowerFragmentOffset},
+                {-horizontalSpeed, lowerLaunchSpeed}},
+            {{block.x + rightFragmentOffset, block.y + lowerFragmentOffset},
+                {horizontalSpeed, lowerLaunchSpeed}}
+        },
+        0.0f
+    });
+}
+
+void UpdateBrokenBrickAnimations(float deltaTime)
+{
+    // The NES adds $50/256 px of downward force per frame and caps
+    // falling chunks at 8 px/frame.
+    constexpr float fragmentGravity =
+        (80.0f / 256.0f) * 3.0f *
+        nesNtscFrameRate * nesNtscFrameRate;
+    constexpr float maximumFallSpeed =
+        8.0f * 3.0f * nesNtscFrameRate;
+    constexpr float maximumLifetime = 2.0f;
+
+    for (BrokenBrickAnimation& animation : brokenBrickAnimations)
+    {
+        animation.age += deltaTime;
+
+        for (BrickFragment& fragment : animation.fragments)
+        {
+            fragment.velocity.y = std::min(
+                maximumFallSpeed,
+                fragment.velocity.y + fragmentGravity * deltaTime
+            );
+            fragment.position.x += fragment.velocity.x * deltaTime;
+            fragment.position.y += fragment.velocity.y * deltaTime;
+        }
+    }
+
+    std::erase_if(
+        brokenBrickAnimations,
+        [maximumLifetime](const BrokenBrickAnimation& animation)
+        {
+            return animation.age >= maximumLifetime;
         }
     );
 }
@@ -530,7 +673,9 @@ std::vector<Goomba> FindGoombaSpawns(
 				false,
 				true,
 				false,
-				false
+				false,
+				false,
+				0.0f
 			};
 
             goombas.push_back(goomba);
@@ -567,7 +712,8 @@ std::vector<Koopa> FindKoopaSpawns(
                 true,
                 false,
                 false,
-                false
+                false,
+                0.0f
             });
         }
     }
@@ -644,6 +790,46 @@ void UpdateBlockCoins(
         ),
         blockCoins.end()
     );
+}
+
+void SpawnBlockCoin(
+    std::vector<BlockCoin>& blockCoins,
+    const Rectangle& block
+)
+{
+    constexpr float coinSize = static_cast<float>(tileSize);
+
+    blockCoins.push_back({
+        {
+            block.x,
+            block.y,
+            coinSize,
+            coinSize
+        },
+        block.y,
+        0.0f
+    });
+}
+
+void UpdateMultiCoinBlocks(float deltaTime)
+{
+    for (MultiCoinBlock& block : multiCoinBlocks)
+    {
+        if (block.finalCoinOnly)
+        {
+            continue;
+        }
+
+        block.timeRemaining = std::max(
+            0.0f,
+            block.timeRemaining - deltaTime
+        );
+
+        if (block.timeRemaining <= 0.0f)
+        {
+            block.finalCoinOnly = true;
+        }
+    }
 }
 
 void UpdateSuperMushrooms(
@@ -812,6 +998,111 @@ void CollectFireFlowers(
         flower.collected = true;
         player.big = true;
         player.fire = true;
+    }
+}
+
+void UpdateSuperStars(
+    std::vector<SuperStar>& stars,
+    const Level& level,
+    float deltaTime,
+    float gravity
+)
+{
+    constexpr float emergeSpeed = 48.0f;
+    constexpr float moveSpeed = 150.0f;
+    constexpr float bounceSpeed = 620.0f;
+
+    for (SuperStar& star : stars)
+    {
+        if (star.collected)
+        {
+            continue;
+        }
+
+        if (star.emerging)
+        {
+            star.body.y = std::max(
+                star.targetY,
+                star.body.y - emergeSpeed * deltaTime
+            );
+
+            if (star.body.y <= star.targetY)
+            {
+                star.emerging = false;
+                star.velocity.x = moveSpeed;
+            }
+
+            continue;
+        }
+
+        float previousX = star.body.x;
+        star.body.x += star.velocity.x * deltaTime;
+
+        for (const Rectangle& tile : GetNearbySolidTiles(level, star.body))
+        {
+            if (!CheckCollisionRecs(star.body, tile))
+            {
+                continue;
+            }
+
+            if (star.velocity.x > 0.0f && previousX + star.body.width <= tile.x)
+            {
+                star.body.x = tile.x - star.body.width;
+                star.velocity.x = -moveSpeed;
+            }
+            else if (star.velocity.x < 0.0f && previousX >= tile.x + tile.width)
+            {
+                star.body.x = tile.x + tile.width;
+                star.velocity.x = moveSpeed;
+            }
+        }
+
+        float previousY = star.body.y;
+        star.velocity.y += gravity * deltaTime;
+        star.body.y += star.velocity.y * deltaTime;
+
+        for (const Rectangle& tile : GetNearbySolidTiles(level, star.body))
+        {
+            if (!CheckCollisionRecs(star.body, tile))
+            {
+                continue;
+            }
+
+            if (
+                star.velocity.y > 0.0f &&
+                previousY + star.body.height <= tile.y + 10.0f
+            )
+            {
+                star.body.y = tile.y - star.body.height;
+                star.velocity.y = -bounceSpeed;
+            }
+            else if (star.velocity.y < 0.0f && previousY >= tile.y + tile.height)
+            {
+                star.body.y = tile.y + tile.height;
+                star.velocity.y = 0.0f;
+            }
+        }
+    }
+}
+
+void CollectSuperStars(Player& player, std::vector<SuperStar>& stars)
+{
+    constexpr float starDuration = 12.0f;
+
+    for (SuperStar& star : stars)
+    {
+        if (
+            star.collected ||
+            star.emerging ||
+            !CheckCollisionRecs(player.body, star.body)
+        )
+        {
+            continue;
+        }
+
+        star.collected = true;
+        player.star = true;
+        player.starTimer = starDuration;
     }
 }
 
@@ -1234,6 +1525,7 @@ void ResolvePlayerVerticalCollisions(
     Level& level,
     std::vector<SuperMushroom>& mushrooms,
     std::vector<FireFlower>& fireFlowers,
+    std::vector<SuperStar>& stars,
     std::vector<Goomba>& goombas,
     std::vector<Koopa>& koopas,
     std::vector<BlockCoin>& blockCoins,
@@ -1464,8 +1756,10 @@ void ResolvePlayerVerticalCollisions(
 
                 if (
                     hitTile == 'B' ||
+                    hitTile == 'N' ||
                     hitTile == 'M' ||
                     hitTile == 'A' ||
+                    hitTile == 'T' ||
                     hitTile == 'I' ||
                     hitTile == 'Q'
                 )
@@ -1481,6 +1775,12 @@ void ResolvePlayerVerticalCollisions(
                 if (hitTile == 'B' && player.big)
                 {
                     hitTile = '.';
+                    StartBrokenBrickAnimation(tile);
+
+                    // SMB gives Mario a small upward rebound when the
+                    // brick gives way instead of stopping him dead.
+                    player.velocity.y =
+                        -2.0f * 3.0f * nesNtscFrameRate;
                 }
                 else if (hitTile == 'B')
                 {
@@ -1582,26 +1882,85 @@ void ResolvePlayerVerticalCollisions(
                         true
                     });
                 }
+                else if (hitTile == 'T')
+                {
+                    hitTile = 'E';
+                    StartBlockBump(tileRow, tileColumn);
+
+                    constexpr float itemSize =
+                        static_cast<float>(tileSize);
+                    constexpr float hitboxWidth = itemSize + 2.0f;
+                    constexpr float blockBumpHeight = 10.0f;
+
+                    stars.push_back({
+                        {
+                            tile.x - 1.0f,
+                            tile.y - blockBumpHeight,
+                            hitboxWidth,
+                            itemSize
+                        },
+                        {0.0f, 0.0f},
+                        tile.y - itemSize,
+                        true,
+                        false
+                    });
+                }
+                else if (hitTile == 'N')
+                {
+                    constexpr int maximumCoins = 10;
+                    constexpr float activeDuration = 4.0f;
+
+                    StartBlockBump(tileRow, tileColumn);
+                    ++coinCount;
+                    SpawnBlockCoin(blockCoins, tile);
+
+                    auto activeBlock = std::find_if(
+                        multiCoinBlocks.begin(),
+                        multiCoinBlocks.end(),
+                        [tileRow, tileColumn](const MultiCoinBlock& block)
+                        {
+                            return
+                                block.row == tileRow &&
+                                block.column == tileColumn;
+                        }
+                    );
+
+                    if (activeBlock == multiCoinBlocks.end())
+                    {
+                        multiCoinBlocks.push_back({
+                            tileRow,
+                            tileColumn,
+                            maximumCoins - 1,
+                            activeDuration,
+                            false
+                        });
+                    }
+                    else
+                    {
+                        if (activeBlock->finalCoinOnly)
+                        {
+                            hitTile = 'E';
+                            multiCoinBlocks.erase(activeBlock);
+                        }
+                        else
+                        {
+                            --activeBlock->coinsRemaining;
+
+                            if (activeBlock->coinsRemaining <= 0)
+                            {
+                                hitTile = 'E';
+                                multiCoinBlocks.erase(activeBlock);
+                            }
+                        }
+                    }
+                }
                 else if (hitTile == 'Q')
                 {
                     hitTile = 'E';
                     StartBlockBump(tileRow, tileColumn);
                     ++coinCount;
 
-                    constexpr float coinWidth = 24.0f;
-                    constexpr float coinHeight = 32.0f;
-
-                    blockCoins.push_back({
-                        {
-                            tile.x +
-                                (tileSize - coinWidth) / 2.0f,
-                            tile.y,
-                            coinWidth,
-                            coinHeight
-                        },
-                        tile.y,
-                        0.0f
-                    });
+                    SpawnBlockCoin(blockCoins, tile);
                 }
             }
         }
@@ -1764,6 +2123,18 @@ void UpdateGoombas(
 
         if (goomba.dying)
         {
+            if (goomba.stomped)
+            {
+                goomba.deathTimer -= deltaTime;
+
+                if (goomba.deathTimer <= 0.0f)
+                {
+                    goomba.alive = false;
+                }
+
+                continue;
+            }
+
             goomba.velocity.y += gravity * deltaTime;
             goomba.body.y += goomba.velocity.y * deltaTime;
 
@@ -1924,6 +2295,9 @@ void UpdateKoopas(
     float gravity
 )
 {
+    // SMB uses a value of $10 in an interval timer that advances once
+    // every 21 NTSC frames. The shell changes to its wake-up graphic
+    // below $05, during the final four intervals.
     for (Koopa& koopa : koopas)
     {
         if (!koopa.alive || !koopa.spawned)
@@ -1942,6 +2316,31 @@ void UpdateKoopas(
             }
 
             continue;
+        }
+
+        if (koopa.shelled)
+        {
+            koopa.shellReviveTimer = std::max(
+                0.0f,
+                koopa.shellReviveTimer - deltaTime
+            );
+
+            if (koopa.shellReviveTimer <= 0.0f)
+            {
+                float feet = koopa.body.y + koopa.body.height;
+                float centre = koopa.body.x + koopa.body.width / 2.0f;
+
+                koopa.shelled = false;
+                koopa.body = {
+                    centre - 18.0f,
+                    feet - 48.0f,
+                    36.0f,
+                    48.0f
+                };
+
+                int nesFrame = static_cast<int>(GetTime() * nesNtscFrameRate);
+                koopa.velocity.x = (nesFrame & 1) == 0 ? -90.0f : 90.0f;
+            }
         }
 
         koopa.velocity.y += gravity * deltaTime;
@@ -1981,6 +2380,40 @@ void SpawnKoopasNearCamera(
 // Player/Goomba interaction
 // --------------------------------------------------
 
+void HitEnemiesAsStarMario(
+    const Player& player,
+    std::vector<Goomba>& goombas,
+    std::vector<Koopa>& koopas
+)
+{
+    if (!player.star)
+    {
+        return;
+    }
+
+    for (Goomba& goomba : goombas)
+    {
+        if (
+            goomba.alive && goomba.spawned && !goomba.dying &&
+            CheckCollisionRecs(player.body, goomba.body)
+        )
+        {
+            KillGoomba(goomba);
+        }
+    }
+
+    for (Koopa& koopa : koopas)
+    {
+        if (
+            koopa.alive && koopa.spawned && !koopa.dying &&
+            CheckCollisionRecs(player.body, koopa.body)
+        )
+        {
+            KillKoopa(koopa);
+        }
+    }
+}
+
 bool HandlePlayerGoombaCollisions(
     Player& player,
     std::vector<Goomba>& goombas,
@@ -2015,7 +2448,10 @@ bool HandlePlayerGoombaCollisions(
 
         if (falling && wasAboveGoomba)
         {
-            goomba.alive = false;
+            goomba.dying = true;
+            goomba.stomped = true;
+            goomba.deathTimer = 0.4f;
+            goomba.velocity = {0.0f, 0.0f};
 
             player.body.y =
                 goomba.body.y -
@@ -2069,6 +2505,7 @@ bool HandlePlayerKoopaCollisions(
             koopa.shelled = true;
             koopa.velocity = {0.0f, 0.0f};
             koopa.body = {koopa.body.x, feet - 32.0f, 40.0f, 32.0f};
+            koopa.shellReviveTimer = koopaShellReviveDuration;
 
             player.body.y = koopa.body.y - player.body.height;
             player.velocity.y = -stompBounceSpeed;
@@ -2345,6 +2782,19 @@ void DrawLevel(
     const GameTextures& textures
 )
 {
+    const Texture2D* questionBlockFrames[] = {
+        &textures.questionBlock1,
+        &textures.questionBlock2,
+        &textures.questionBlock3
+    };
+    // SMB updates this palette every eight frames, using a six-entry
+    // table whose first colour appears three times: 1, 1, 1, 2, 3, 2.
+    constexpr int questionBlockSequence[] = {0, 0, 0, 1, 2, 1};
+    int nesFrame = static_cast<int>(GetTime() * nesNtscFrameRate);
+    int sequenceFrame = (nesFrame / 8) % 6;
+    const Texture2D& questionBlockTexture =
+        *questionBlockFrames[questionBlockSequence[sequenceFrame]];
+
     for (int row = 0; row < GetLevelRows(level); ++row)
     {
         for (
@@ -2368,6 +2818,7 @@ void DrawLevel(
                     break;
 
                 case 'B':
+                case 'N':
                     DrawTextureAsTile(
                         textures.brick,
                         destination
@@ -2378,7 +2829,14 @@ void DrawLevel(
                 case 'M':
                 case 'A':
                     DrawTextureAsTile(
-                        textures.questionBlock,
+                        questionBlockTexture,
+                        destination
+                    );
+                    break;
+
+                case 'T':
+                    DrawTextureAsTile(
+                        textures.brick,
                         destination
                     );
                     break;
@@ -2475,11 +2933,72 @@ void DrawLevel(
     }
 }
 
+void DrawBrokenBrickAnimations(
+    const std::vector<BrokenBrickAnimation>& animations,
+    const Texture2D& brokenBrick,
+    const Texture2D& piece1,
+    const Texture2D& piece2
+)
+{
+    constexpr float impactFrameDuration = 1.0f / nesNtscFrameRate;
+    constexpr float fragmentSize = 8.0f * 3.0f;
+    Rectangle pieceSource{4.0f, 4.0f, 8.0f, 8.0f};
+
+    // The NES rotates every chunk in sync using bits 3-2 of its frame
+    // counter, so the diagonal pose changes every four frames.
+    int nesFrame = static_cast<int>(GetTime() * nesNtscFrameRate);
+    const Texture2D& pieceTexture =
+        ((nesFrame / 4) & 1) == 0 ? piece1 : piece2;
+
+    for (const BrokenBrickAnimation& animation : animations)
+    {
+        if (animation.age < impactFrameDuration)
+        {
+            Rectangle source{
+                0.0f,
+                0.0f,
+                static_cast<float>(brokenBrick.width),
+                static_cast<float>(brokenBrick.height)
+            };
+            DrawTextureInsideRectangle(
+                brokenBrick,
+                source,
+                animation.originalBlock
+            );
+            continue;
+        }
+
+        for (const BrickFragment& fragment : animation.fragments)
+        {
+            Rectangle destination{
+                fragment.position.x,
+                fragment.position.y,
+                fragmentSize,
+                fragmentSize
+            };
+            DrawTextureInsideRectangle(
+                pieceTexture,
+                pieceSource,
+                destination
+            );
+        }
+    }
+}
+
 void DrawPlayer(
     const Player& player,
     const GameTextures& textures
 )
 {
+    if (
+        !player.dying &&
+        player.invulnerabilityTimer > 0.0f &&
+        (static_cast<int>(GetTime() * nesNtscFrameRate) & 0x04) != 0
+    )
+    {
+        return;
+    }
+
     const Texture2D* texture = &textures.player;
 
     const Texture2D* smallWalkTextures[] = {
@@ -2503,6 +3022,10 @@ void DrawPlayer(
     if (player.dying)
     {
         texture = &textures.marioDead;
+    }
+    else if (player.star)
+    {
+        texture = &textures.starMario;
     }
     else if (player.ducking)
     {
@@ -2585,10 +3108,18 @@ void DrawPlayer(
 
 void DrawFireFlowers(
     const std::vector<FireFlower>& flowers,
-    const Texture2D& texture
+    const Texture2D& texture1,
+    const Texture2D& texture2,
+    const Texture2D& texture3,
+    const Texture2D& texture4
 )
 {
-    Rectangle source{0.0f, 0.0f, 16.0f, 16.0f};
+    const Texture2D* frames[] = {
+        &texture1, &texture2, &texture3, &texture4
+    };
+    int frame = static_cast<int>(GetTime() * 10.0) % 4;
+    const Texture2D& texture = *frames[frame];
+    Rectangle source = GetFirstSquareFrame(texture);
 
     for (const FireFlower& flower : flowers)
     {
@@ -2598,6 +3129,33 @@ void DrawFireFlowers(
             spriteBody.x += 1.0f;
             spriteBody.width -= 2.0f;
 
+            DrawTextureInsideRectangle(texture, source, spriteBody);
+        }
+    }
+}
+
+void DrawSuperStars(
+    const std::vector<SuperStar>& stars,
+    const Texture2D& texture1,
+    const Texture2D& texture2,
+    const Texture2D& texture3,
+    const Texture2D& texture4
+)
+{
+    const Texture2D* frames[] = {
+        &texture1, &texture2, &texture3, &texture4
+    };
+    int frame = static_cast<int>(GetTime() * 12.0) % 4;
+    const Texture2D& texture = *frames[frame];
+    Rectangle source = GetFirstSquareFrame(texture);
+
+    for (const SuperStar& star : stars)
+    {
+        if (!star.collected)
+        {
+            Rectangle spriteBody = star.body;
+            spriteBody.x += 1.0f;
+            spriteBody.width -= 2.0f;
             DrawTextureInsideRectangle(texture, source, spriteBody);
         }
     }
@@ -2694,23 +3252,26 @@ void DrawCoins(
 
 void DrawBlockCoins(
     const std::vector<BlockCoin>& blockCoins,
-    const Texture2D& texture
+    const Texture2D& texture1,
+    const Texture2D& texture2,
+    const Texture2D& texture3,
+    const Texture2D& texture4
 )
 {
-    Rectangle source{
-        0.0f,
-        0.0f,
-        static_cast<float>(texture.width),
-        static_cast<float>(texture.height)
+    const Texture2D* frames[] = {
+        &texture1, &texture2, &texture3, &texture4
     };
 
     for (const BlockCoin& coin : blockCoins)
     {
-        // Briefly flicker as the coin pops above the used block.
-        if (std::fmod(coin.age, 0.12f) < 0.035f)
-        {
-            continue;
-        }
+        int frame = static_cast<int>(coin.age * 16.0f) % 4;
+        const Texture2D& texture = *frames[frame];
+        Rectangle source{
+            0.0f,
+            0.0f,
+            static_cast<float>(texture.width),
+            static_cast<float>(texture.height)
+        };
 
         DrawTexturePro(
             texture,
@@ -2725,7 +3286,9 @@ void DrawBlockCoins(
 
 void DrawGoomba(
     const Goomba& goomba,
-    const Texture2D& texture
+    const Texture2D& texture,
+    const Texture2D& deadTexture,
+    bool alternateWalkFrame
 )
 {
     if (
@@ -2736,10 +3299,13 @@ void DrawGoomba(
         return;
     }
 
-    Rectangle source =
-        GetFirstSquareFrame(texture);
+    const Texture2D& displayedTexture =
+        goomba.stomped ? deadTexture : texture;
 
-    if (goomba.dying)
+    Rectangle source =
+        GetFirstSquareFrame(displayedTexture);
+
+    if (goomba.dying && !goomba.stomped)
     {
         source.y += source.height;
         source.height = -source.height;
@@ -2759,17 +3325,22 @@ void DrawGoomba(
         goomba.velocity.x > 0.0f;
 
     DrawTextureInsideRectangle(
-        texture,
+        displayedTexture,
         source,
         destination,
-        movingRight
+        !goomba.dying && alternateWalkFrame
+            ? !movingRight
+            : movingRight
     );
 }
 
 void DrawKoopa(
     const Koopa& koopa,
     const Texture2D& koopaTexture,
-    const Texture2D& shellTexture
+    const Texture2D& koopaWalkTexture,
+    bool alternateWalkFrame,
+    const Texture2D& shellTexture,
+    const Texture2D& shellWakeTexture
 )
 {
     if (!koopa.alive || !koopa.spawned)
@@ -2777,12 +3348,30 @@ void DrawKoopa(
         return;
     }
 
-    const Texture2D& texture =
-        koopa.shelled ? shellTexture : koopaTexture;
+    bool waking =
+        koopa.shelled &&
+        std::abs(koopa.velocity.x) <= 1.0f &&
+        koopa.shellReviveTimer <= koopaShellWakeDuration;
+
+    const Texture2D& texture = koopa.shelled
+        ? (waking ? shellWakeTexture : shellTexture)
+        : (!koopa.dying && alternateWalkFrame
+            ? koopaWalkTexture
+            : koopaTexture);
 
     Rectangle source = koopa.shelled
-        ? Rectangle{0.0f, 0.0f, 16.0f, 14.0f}
-        : Rectangle{0.0f, 0.0f, 16.0f, 23.0f};
+        ? Rectangle{
+            0.0f,
+            0.0f,
+            static_cast<float>(texture.width),
+            static_cast<float>(texture.height)
+        }
+        : Rectangle{
+            0.0f,
+            0.0f,
+            static_cast<float>(texture.width),
+            static_cast<float>(texture.height)
+        };
 
     if (koopa.dying)
     {
@@ -2793,8 +3382,14 @@ void DrawKoopa(
     constexpr float spriteWidth = 48.0f;
 
     float spriteHeight = koopa.shelled
-        ? spriteWidth * (14.0f / 16.0f)
-        : spriteWidth * (23.0f / 16.0f);
+        ? spriteWidth * (
+            static_cast<float>(texture.height) /
+            static_cast<float>(texture.width)
+        )
+        : spriteWidth * (
+            static_cast<float>(texture.height) /
+            static_cast<float>(texture.width)
+        );
 
     Rectangle destination{
         koopa.body.x +
@@ -2952,6 +3547,7 @@ void RespawnPlayer(
     const std::vector<Koopa>& initialKoopas,
     std::vector<SuperMushroom>& mushrooms,
     std::vector<FireFlower>& fireFlowers,
+    std::vector<SuperStar>& stars,
     std::vector<FireBall>& fireBalls,
     float& jumpBufferTimer,
     float& coyoteTimer
@@ -2977,6 +3573,9 @@ void RespawnPlayer(
     player.walkAnimationFrame = 0;
     player.fireThrowTimer = 0.0f;
     player.skidding = false;
+    player.star = false;
+    player.starTimer = 0.0f;
+    player.damageTransformTimer = 0.0f;
 
     jumpBufferTimer = 0.0f;
     coyoteTimer = 0.0f;
@@ -2996,8 +3595,11 @@ void RespawnPlayer(
     koopas = initialKoopas;
     mushrooms.clear();
     fireFlowers.clear();
+    stars.clear();
     fireBalls.clear();
     blockBumps.clear();
+    brokenBrickAnimations.clear();
+    multiCoinBlocks.clear();
 }
 
 // --------------------------------------------------
@@ -3028,22 +3630,22 @@ int main()
     constexpr float coyoteTimeDuration = 0.06f;
 
     Level level{
-        "....................................................................................................................................................................................................................",
-        "....................................................................................................................................................................................................................",
-        "....................................................................................................................................................................................................................",
-        "..................................................................................G.................................................................................................................................",
-        "......................Q.........................................................BBBBBBBB...BBBQ..............M...........BBB....BQQB........................................................SS......................",
-        "...........................................................................................................................................................................................SSS......................",
-        "...............................................................................G..........................................................................................................SSSS......................",
-        "................................................................I........................................................................................................................SSSSS......................",
-        "................Q...BMBQB.....................Hh.........Hh..................BAB..............B.....BB....Q..Q..Q.....B..........BB......S..S..........SS..S............BBQB............SSSSSS......................",
-        "......................................Hh......Vv.........Vv.............................................................................SS..SS........SSS..SS..........................SSSSSSS......................",
-        "............................Hh........Vv......Vv.........Vv............................................................................SSS..SSS......SSSS..SSS.....Hh..............Hh.SSSSSSSS........F.............",
-        "...P.................G......Vv........Vv.G....Vv.....G.G.Vv....................................G.G........K.................GG.G.G....SSSS..SSSS....SSSSS..SSSS....Vv.........GG...VvSSSSSSSSS........S.............",
-        "#####################################################################..###############...################################################################..#########################################################",
-        "#####################################################################..###############...################################################################..#########################################################",
-        "#####################################################################..###############...################################################################..#########################################################",
-        "#####################################################################..###############...################################################################..#########################################################"
+        "............................................................................................................................................................................................................................",
+        "............................................................................................................................................................................................................................",
+        "............................................................................................................................................................................................................................",
+        "..........................................................................................G.................................................................................................................................",
+        "..............................Q.........................................................BBBBBBBB...BBBQ..............A...........BBB....BQQB........................................................SS......................",
+        "...................................................................................................................................................................................................SSS......................",
+        ".......................................................................................G..........................................................................................................SSSS......................",
+        "........................................................................I........................................................................................................................SSSSS......................",
+        "........................Q...BABQB.....................Hh.........Hh..................BAB..............N.....BT....Q..Q..Q.....B..........BB......S..S..........SS..S............BBQB............SSSSSS......................",
+        "..............................................Hh......Vv.........Vv.............................................................................SS..SS........SSS..SS..........................SSSSSSS......................",
+        "....................................Hh........Vv......Vv.........Vv............................................................................SSS..SSS......SSSS..SSS.....Hh..............Hh.SSSSSSSS........F.............",
+        "..P..........................G......Vv........Vv.G....Vv.....G.G.Vv....................................G.G........K.................GG.G.G....SSSS..SSSS....SSSSS..SSSS....Vv.........GG...VvSSSSSSSSS........S.............",
+        "#############################################################################..###############...################################################################..#########################################################",
+        "#############################################################################..###############...################################################################..#########################################################",
+        "#############################################################################..###############...################################################################..#########################################################",
+        "#############################################################################..###############...################################################################..#########################################################"
     };
 
     NormaliseLevel(level);
@@ -3077,15 +3679,31 @@ int main()
     SetWindowMinSize(640, 360);
     SetTargetFPS(60);
 
+    int starMarioFrameCount = 0;
+    Image starMarioImage = LoadImageAnim(
+        "resources/Mario/Star_Mario.gif",
+        &starMarioFrameCount
+    );
+    Texture2D starMarioTexture = LoadTextureFromImage(starMarioImage);
+
     GameTextures textures{
         LoadTexture("resources/Blocks/Ground.png"),
         LoadTexture("resources/Blocks/Brick.png"),
-        LoadTexture("resources/Blocks/Q_Block.png"),
+        LoadTexture("resources/Blocks/Broken_Brick.png"),
+        LoadTexture("resources/Blocks/Brick_Piece_1.png"),
+        LoadTexture("resources/Blocks/Brick_Piece_2.png"),
+        LoadTexture("resources/Blocks/Q_Block_1.png"),
+        LoadTexture("resources/Blocks/Q_Block_2.png"),
+        LoadTexture("resources/Blocks/Q_Block_3.png"),
         LoadTexture("resources/Blocks/Empty_Block.png"),
         LoadTexture("resources/Blocks/Stair_Block.png"),
         LoadTexture("resources/Pipe.png"),
         LoadTexture("resources/Pipe_Base.png"),
         LoadTexture("resources/Coin.png"),
+        LoadTexture("resources/Coin_Flash_1.png"),
+        LoadTexture("resources/Coin_Flash_2.png"),
+        LoadTexture("resources/Coin_Flash_3.png"),
+        LoadTexture("resources/Coin_Flash_4.png"),
         LoadTexture("resources/Mario/Small_Mario.png"),
         LoadTexture("resources/Mario/Small_Mario_Walk_1.png"),
         LoadTexture("resources/Mario/Small_Mario_Walk_2.png"),
@@ -3109,11 +3727,22 @@ int main()
         LoadTexture("resources/Mario/Fire_Mario_Switch.png"),
         LoadTexture("resources/Mario/Fire_Mario_Fire.png"),
         LoadTexture("resources/Enemies/Goomba.png"),
+        LoadTexture("resources/Enemies/Goomba_Dead.png"),
         LoadTexture("resources/Enemies/Green_Koopa.png"),
+        LoadTexture("resources/Enemies/Green_Koopa_Walk.png"),
         LoadTexture("resources/Green_Shell.png"),
+        LoadTexture("resources/Green_Shell_Wake.png"),
         LoadTexture("resources/Items/Super_Mushroom.png"),
         LoadTexture("resources/Items/1_Up_Mushroom.png"),
-        LoadTexture("resources/Items/Fire_Flower.png"),
+        LoadTexture("resources/Items/Fire_Flower_1.png"),
+        LoadTexture("resources/Items/Fire_Flower_2.png"),
+        LoadTexture("resources/Items/Fire_Flower_3.png"),
+        LoadTexture("resources/Items/Fire_Flower_4.png"),
+        LoadTexture("resources/Items/Star_1.png"),
+        LoadTexture("resources/Items/Star_2.png"),
+        LoadTexture("resources/Items/Star_3.png"),
+        LoadTexture("resources/Items/Star_4.png"),
+        starMarioTexture,
         LoadTexture("resources/Fire_Ball.png"),
         LoadTexture("resources/Flag.png")
     };
@@ -3127,11 +3756,13 @@ int main()
         textures.brick,
         TEXTURE_FILTER_POINT
     );
+    SetTextureFilter(textures.brokenBrick, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.brickPiece1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.brickPiece2, TEXTURE_FILTER_POINT);
 
-    SetTextureFilter(
-        textures.questionBlock,
-        TEXTURE_FILTER_POINT
-    );
+    SetTextureFilter(textures.questionBlock1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.questionBlock2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.questionBlock3, TEXTURE_FILTER_POINT);
 
     SetTextureFilter(textures.emptyBlock, TEXTURE_FILTER_POINT);
 
@@ -3151,6 +3782,10 @@ int main()
         textures.coin,
         TEXTURE_FILTER_POINT
     );
+    SetTextureFilter(textures.coinFlash1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.coinFlash2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.coinFlash3, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.coinFlash4, TEXTURE_FILTER_POINT);
 
     SetTextureFilter(
         textures.player,
@@ -3186,16 +3821,33 @@ int main()
         TEXTURE_FILTER_POINT
     );
 
+    SetTextureFilter(textures.goombaDead, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.koopa, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.koopaWalk, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.greenShell, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.greenShellWake, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.superMushroom, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.oneUpMushroom, TEXTURE_FILTER_POINT);
-    SetTextureFilter(textures.fireFlower, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireFlower1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireFlower2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireFlower3, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.fireFlower4, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.star1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.star2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.star3, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.star4, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.starMario, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.fireBall, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.flag, TEXTURE_FILTER_POINT);
 
     if (
         textures.ground.id == 0 ||
+        textures.brokenBrick.id == 0 ||
+        textures.brickPiece1.id == 0 ||
+        textures.brickPiece2.id == 0 ||
+        textures.questionBlock1.id == 0 ||
+        textures.questionBlock2.id == 0 ||
+        textures.questionBlock3.id == 0 ||
         textures.pipeBase.id == 0 ||
         textures.emptyBlock.id == 0 ||
         textures.player.id == 0 ||
@@ -3221,11 +3873,26 @@ int main()
         textures.fireMarioSwitch.id == 0 ||
         textures.fireMarioThrow.id == 0 ||
         textures.goomba.id == 0 ||
+        textures.goombaDead.id == 0 ||
         textures.koopa.id == 0 ||
+        textures.koopaWalk.id == 0 ||
         textures.greenShell.id == 0 ||
+        textures.greenShellWake.id == 0 ||
         textures.superMushroom.id == 0 ||
         textures.oneUpMushroom.id == 0 ||
-        textures.fireFlower.id == 0 ||
+        textures.coinFlash1.id == 0 ||
+        textures.coinFlash2.id == 0 ||
+        textures.coinFlash3.id == 0 ||
+        textures.coinFlash4.id == 0 ||
+        textures.fireFlower1.id == 0 ||
+        textures.fireFlower2.id == 0 ||
+        textures.fireFlower3.id == 0 ||
+        textures.fireFlower4.id == 0 ||
+        textures.star1.id == 0 ||
+        textures.star2.id == 0 ||
+        textures.star3.id == 0 ||
+        textures.star4.id == 0 ||
+        textures.starMario.id == 0 ||
         textures.fireBall.id == 0 ||
         textures.flag.id == 0
     )
@@ -3236,6 +3903,12 @@ int main()
         );
 
         UnloadTexture(textures.ground);
+        UnloadTexture(textures.brokenBrick);
+        UnloadTexture(textures.brickPiece1);
+        UnloadTexture(textures.brickPiece2);
+        UnloadTexture(textures.questionBlock1);
+        UnloadTexture(textures.questionBlock2);
+        UnloadTexture(textures.questionBlock3);
         UnloadTexture(textures.pipeBase);
         UnloadTexture(textures.emptyBlock);
         UnloadTexture(textures.player);
@@ -3261,11 +3934,27 @@ int main()
         UnloadTexture(textures.fireMarioSwitch);
         UnloadTexture(textures.fireMarioThrow);
         UnloadTexture(textures.goomba);
+        UnloadTexture(textures.goombaDead);
         UnloadTexture(textures.koopa);
+        UnloadTexture(textures.koopaWalk);
         UnloadTexture(textures.greenShell);
+        UnloadTexture(textures.greenShellWake);
         UnloadTexture(textures.superMushroom);
         UnloadTexture(textures.oneUpMushroom);
-        UnloadTexture(textures.fireFlower);
+        UnloadTexture(textures.coinFlash1);
+        UnloadTexture(textures.coinFlash2);
+        UnloadTexture(textures.coinFlash3);
+        UnloadTexture(textures.coinFlash4);
+        UnloadTexture(textures.fireFlower1);
+        UnloadTexture(textures.fireFlower2);
+        UnloadTexture(textures.fireFlower3);
+        UnloadTexture(textures.fireFlower4);
+        UnloadTexture(textures.star1);
+        UnloadTexture(textures.star2);
+        UnloadTexture(textures.star3);
+        UnloadTexture(textures.star4);
+        UnloadTexture(textures.starMario);
+        UnloadImage(starMarioImage);
         UnloadTexture(textures.fireBall);
         UnloadTexture(textures.flag);
 
@@ -3306,11 +3995,15 @@ int main()
         0.0f,
         0,
         0.0f,
-        false
+        false,
+        false,
+        0.0f,
+        0.0f
     };
 
     std::vector<SuperMushroom> mushrooms;
     std::vector<FireFlower> fireFlowers;
+    std::vector<SuperStar> stars;
     std::vector<FireBall> fireBalls;
 
     std::vector<Coin> initialCoins =
@@ -3352,6 +4045,9 @@ int main()
 
     float jumpBufferTimer = 0.0f;
     float coyoteTimer = 0.0f;
+    float pitRespawnTimer = 0.0f;
+    bool pitDeathPending = false;
+    int displayedStarMarioFrame = -1;
 
     while (!WindowShouldClose())
     {
@@ -3361,23 +4057,74 @@ int main()
                 0.05f
             );
 
+        if (starMarioFrameCount > 0 && starMarioImage.data != nullptr)
+        {
+            int frame = static_cast<int>(GetTime() * 12.0) %
+                starMarioFrameCount;
+
+            if (frame != displayedStarMarioFrame)
+            {
+                int frameDataSize =
+                    starMarioImage.width * starMarioImage.height * 4;
+                unsigned char* frameData =
+                    static_cast<unsigned char*>(starMarioImage.data) +
+                    frame * frameDataSize;
+
+                UpdateTexture(textures.starMario, frameData);
+                displayedStarMarioFrame = frame;
+            }
+        }
+
         player.invulnerabilityTimer = std::max(
             0.0f,
             player.invulnerabilityTimer - deltaTime
         );
+
+        float previousDamageTransformTimer =
+            player.damageTransformTimer;
+        player.damageTransformTimer = std::max(
+            0.0f,
+            player.damageTransformTimer - deltaTime
+        );
+
+        if (
+            previousDamageTransformTimer > 0.0f &&
+            player.damageTransformTimer <= 0.0f &&
+            player.big
+        )
+        {
+            float bottom = player.body.y + player.body.height;
+            float centre = player.body.x + player.body.width / 2.0f;
+
+            player.body.width = 32.0f;
+            player.body.height = 44.0f;
+            player.body.x = centre - player.body.width / 2.0f;
+            player.body.y = bottom - player.body.height;
+            player.big = false;
+            player.fire = false;
+            player.ducking = false;
+        }
 
         player.fireThrowTimer = std::max(
             0.0f,
             player.fireThrowTimer - deltaTime
         );
 
+        player.starTimer = std::max(
+            0.0f,
+            player.starTimer - deltaTime
+        );
+        player.star = player.starTimer > 0.0f;
+
         UpdateBlockBumps(
             deltaTime,
             mushrooms,
             fireFlowers,
+            stars,
             goombas,
             koopas
         );
+        UpdateBrokenBrickAnimations(deltaTime);
 
         bool wasOnGround =
             player.onGround;
@@ -3408,13 +4155,11 @@ int main()
             direction += 1.0f;
         }
 
-        if (direction < 0.0f)
+        if (pitDeathPending)
         {
-            player.facingLeft = true;
-        }
-        else if (direction > 0.0f)
-        {
-            player.facingLeft = false;
+            direction = 0.0f;
+            player.velocity.x = 0.0f;
+            player.sprinting = false;
         }
 
         bool wantsToDuck =
@@ -3436,7 +4181,15 @@ int main()
         if (player.ducking)
         {
             direction = 0.0f;
-            player.sprinting = false;
+        }
+
+        if (direction < 0.0f)
+        {
+            player.facingLeft = true;
+        }
+        else if (direction > 0.0f)
+        {
+            player.facingLeft = false;
         }
 
         bool sprintKeyDown =
@@ -3603,7 +4356,7 @@ int main()
             }
         }
 
-        if (!sprinting)
+        if (!sprinting && !player.ducking)
         {
             if (player.velocity.x > walkSpeed)
             {
@@ -3693,6 +4446,7 @@ int main()
             level,
             mushrooms,
             fireFlowers,
+            stars,
             goombas,
             koopas,
             blockCoins,
@@ -3701,6 +4455,7 @@ int main()
         );
 
         UpdateBlockCoins(blockCoins, deltaTime);
+        UpdateMultiCoinBlocks(deltaTime);
 
         if (
             player.onGround &&
@@ -3788,6 +4543,12 @@ int main()
             CollectFireFlowers(player, fireFlowers);
         }
 
+        UpdateSuperStars(stars, level, deltaTime, gravity);
+        if (!player.dying)
+        {
+            CollectSuperStars(player, stars);
+        }
+
         UpdateFireBalls(
             fireBalls,
             level,
@@ -3807,6 +4568,11 @@ int main()
             goombas
         );
 
+        if (!player.dying)
+        {
+            HitEnemiesAsStarMario(player, goombas, koopas);
+        }
+
         bool playerHitGoomba = !player.dying &&
             HandlePlayerGoombaCollisions(
                 player,
@@ -3824,25 +4590,20 @@ int main()
         bool playerHitEnemy =
             playerHitGoomba || playerHitKoopa;
 
-        if (playerHitEnemy && player.big)
+        if (
+            playerHitEnemy &&
+            player.big &&
+            player.damageTransformTimer <= 0.0f
+        )
         {
             constexpr float damageInvulnerability = 1.5f;
+            constexpr float damageTransformDelay = 0.45f;
 
-            float bottom =
-                player.body.y + player.body.height;
-
-            float centre =
-                player.body.x + player.body.width / 2.0f;
-
-            player.body.width = 32.0f;
-            player.body.height = 44.0f;
-            player.body.x = centre - player.body.width / 2.0f;
-            player.body.y = bottom - player.body.height;
-            player.big = false;
-            player.fire = false;
             player.ducking = false;
             player.invulnerabilityTimer =
                 damageInvulnerability;
+            player.damageTransformTimer =
+                damageTransformDelay;
 
             playerHitEnemy = false;
         }
@@ -3859,6 +4620,27 @@ int main()
             !player.dying &&
             player.body.y > cameraBottom;
 
+        if (playerFell && !pitDeathPending)
+        {
+            constexpr float pitRespawnDelay = 0.75f;
+
+            pitDeathPending = true;
+            pitRespawnTimer = pitRespawnDelay;
+            player.velocity.x = 0.0f;
+            player.sprinting = false;
+        }
+
+        if (pitDeathPending)
+        {
+            pitRespawnTimer = std::max(
+                0.0f,
+                pitRespawnTimer - deltaTime
+            );
+        }
+
+        bool pitRespawnReady =
+            pitDeathPending && pitRespawnTimer <= 0.0f;
+
         if (playerHitEnemy)
         {
             KillPlayer(player);
@@ -3869,7 +4651,7 @@ int main()
             player.velocity.y > 0.0f &&
             player.body.y > cameraBottom + 100.0f;
 
-        if (playerFell || deathAnimationFinished)
+        if (pitRespawnReady || deathAnimationFinished)
         {
             RespawnPlayer(
                 player,
@@ -3887,10 +4669,14 @@ int main()
                 initialKoopas,
                 mushrooms,
                 fireFlowers,
+                stars,
                 fireBalls,
                 jumpBufferTimer,
                 coyoteTimer
             );
+
+            pitRespawnTimer = 0.0f;
+            pitDeathPending = false;
         }
 
         // --------------------------------
@@ -3957,6 +4743,17 @@ int main()
                     mushroom.collected = true;
                 }
             }
+
+            for (SuperStar& star : stars)
+            {
+                if (
+                    !star.collected &&
+                    star.body.x + star.body.width < viewportLeft
+                )
+                {
+                    star.collected = true;
+                }
+            }
         }
 
         // --------------------------------
@@ -3965,7 +4762,7 @@ int main()
 
         BeginTextureMode(gameTexture);
 
-        ClearBackground(SKYBLUE);
+        ClearBackground({146, 144, 255, 255});
 
         BeginMode2D(camera);
 
@@ -3978,12 +4775,30 @@ int main()
 
         DrawFireFlowers(
             fireFlowers,
-            textures.fireFlower
+            textures.fireFlower1,
+            textures.fireFlower2,
+            textures.fireFlower3,
+            textures.fireFlower4
+        );
+
+        DrawSuperStars(
+            stars,
+            textures.star1,
+            textures.star2,
+            textures.star3,
+            textures.star4
         );
 
         DrawLevel(
             level,
             textures
+        );
+
+        DrawBrokenBrickAnimations(
+            brokenBrickAnimations,
+            textures.brokenBrick,
+            textures.brickPiece1,
+            textures.brickPiece2
         );
 
         DrawCoins(
@@ -3993,24 +4808,36 @@ int main()
 
         DrawBlockCoins(
             blockCoins,
-            textures.coin
+            textures.coinFlash1,
+            textures.coinFlash2,
+            textures.coinFlash3,
+            textures.coinFlash4
         );
+
+        // The original game selects the second enemy frame using bit 3
+        // of its NTSC frame counter.
+        int nesFrame = static_cast<int>(GetTime() * nesNtscFrameRate);
+        bool alternateWalkFrame = (nesFrame & 0x08) != 0;
 
         for (const Goomba& goomba : goombas)
         {
             DrawGoomba(
                 goomba,
-                textures.goomba
+                textures.goomba,
+                textures.goombaDead,
+                alternateWalkFrame
             );
         }
-
 
         for (const Koopa& koopa : koopas)
         {
             DrawKoopa(
                 koopa,
                 textures.koopa,
-                textures.greenShell
+                textures.koopaWalk,
+                alternateWalkFrame,
+                textures.greenShell,
+                textures.greenShellWake
             );
         }
 
@@ -4140,12 +4967,21 @@ int main()
 
     UnloadTexture(textures.ground);
     UnloadTexture(textures.brick);
-    UnloadTexture(textures.questionBlock);
+    UnloadTexture(textures.brokenBrick);
+    UnloadTexture(textures.brickPiece1);
+    UnloadTexture(textures.brickPiece2);
+    UnloadTexture(textures.questionBlock1);
+    UnloadTexture(textures.questionBlock2);
+    UnloadTexture(textures.questionBlock3);
     UnloadTexture(textures.emptyBlock);
     UnloadTexture(textures.stairBlock);
     UnloadTexture(textures.pipe);
     UnloadTexture(textures.pipeBase);
     UnloadTexture(textures.coin);
+    UnloadTexture(textures.coinFlash1);
+    UnloadTexture(textures.coinFlash2);
+    UnloadTexture(textures.coinFlash3);
+    UnloadTexture(textures.coinFlash4);
     UnloadTexture(textures.player);
     UnloadTexture(textures.smallMarioWalk1);
     UnloadTexture(textures.smallMarioWalk2);
@@ -4169,11 +5005,23 @@ int main()
     UnloadTexture(textures.fireMarioSwitch);
     UnloadTexture(textures.fireMarioThrow);
     UnloadTexture(textures.goomba);
+    UnloadTexture(textures.goombaDead);
     UnloadTexture(textures.koopa);
+    UnloadTexture(textures.koopaWalk);
     UnloadTexture(textures.greenShell);
+    UnloadTexture(textures.greenShellWake);
     UnloadTexture(textures.superMushroom);
     UnloadTexture(textures.oneUpMushroom);
-    UnloadTexture(textures.fireFlower);
+    UnloadTexture(textures.fireFlower1);
+    UnloadTexture(textures.fireFlower2);
+    UnloadTexture(textures.fireFlower3);
+    UnloadTexture(textures.fireFlower4);
+    UnloadTexture(textures.star1);
+    UnloadTexture(textures.star2);
+    UnloadTexture(textures.star3);
+    UnloadTexture(textures.star4);
+    UnloadTexture(textures.starMario);
+    UnloadImage(starMarioImage);
     UnloadTexture(textures.fireBall);
     UnloadTexture(textures.flag);
 
