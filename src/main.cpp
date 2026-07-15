@@ -175,6 +175,7 @@ struct BrokenBrickAnimation
     Rectangle originalBlock;
     BrickFragment fragments[4];
     float age;
+    bool blue;
 };
 
 std::vector<BrokenBrickAnimation> brokenBrickAnimations;
@@ -190,6 +191,24 @@ struct MultiCoinBlock
 
 std::vector<MultiCoinBlock> multiCoinBlocks;
 
+struct StarMarioTextures
+{
+    Texture2D small;
+    Texture2D smallJump;
+    Texture2D smallSwitch;
+    Texture2D smallWalk1;
+    Texture2D smallWalk2;
+    Texture2D smallWalk3;
+    Texture2D super;
+    Texture2D superDuck;
+    Texture2D superFire;
+    Texture2D superJump;
+    Texture2D superSwitch;
+    Texture2D superWalk1;
+    Texture2D superWalk2;
+    Texture2D superWalk3;
+};
+
 struct GameTextures
 {
     Texture2D ground;
@@ -197,6 +216,9 @@ struct GameTextures
     Texture2D brokenBrick;
     Texture2D brickPiece1;
     Texture2D brickPiece2;
+    Texture2D blueGround;
+    Texture2D blueBrick;
+    Texture2D blueBrokenBrick;
     Texture2D questionBlock1;
     Texture2D questionBlock2;
     Texture2D questionBlock3;
@@ -209,6 +231,9 @@ struct GameTextures
     Texture2D coinFlash2;
     Texture2D coinFlash3;
     Texture2D coinFlash4;
+    Texture2D blueCoin1;
+    Texture2D blueCoin2;
+    Texture2D blueCoin3;
     Texture2D bigHill;
     Texture2D smallHill;
     Texture2D singleBush;
@@ -255,7 +280,9 @@ struct GameTextures
     Texture2D star2;
     Texture2D star3;
     Texture2D star4;
-    Texture2D starMario;
+    StarMarioTextures brownStarMario;
+    StarMarioTextures greenStarMario;
+    StarMarioTextures redStarMario;
     Texture2D fireBall;
     Texture2D fireBallHit1;
     Texture2D fireBallHit2;
@@ -263,6 +290,60 @@ struct GameTextures
     Texture2D flag;
     Texture2D title;
 };
+
+void SetStarMarioTextureFilter(const StarMarioTextures& textures)
+{
+    SetTextureFilter(textures.small, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallJump, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallSwitch, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallWalk1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallWalk2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.smallWalk3, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.super, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superDuck, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superFire, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superJump, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superSwitch, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superWalk1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superWalk2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.superWalk3, TEXTURE_FILTER_POINT);
+}
+
+bool AreStarMarioTexturesLoaded(const StarMarioTextures& textures)
+{
+    return textures.small.id != 0 &&
+        textures.smallJump.id != 0 &&
+        textures.smallSwitch.id != 0 &&
+        textures.smallWalk1.id != 0 &&
+        textures.smallWalk2.id != 0 &&
+        textures.smallWalk3.id != 0 &&
+        textures.super.id != 0 &&
+        textures.superDuck.id != 0 &&
+        textures.superFire.id != 0 &&
+        textures.superJump.id != 0 &&
+        textures.superSwitch.id != 0 &&
+        textures.superWalk1.id != 0 &&
+        textures.superWalk2.id != 0 &&
+        textures.superWalk3.id != 0;
+}
+
+void UnloadStarMarioTextures(const StarMarioTextures& textures)
+{
+    UnloadTexture(textures.small);
+    UnloadTexture(textures.smallJump);
+    UnloadTexture(textures.smallSwitch);
+    UnloadTexture(textures.smallWalk1);
+    UnloadTexture(textures.smallWalk2);
+    UnloadTexture(textures.smallWalk3);
+    UnloadTexture(textures.super);
+    UnloadTexture(textures.superDuck);
+    UnloadTexture(textures.superFire);
+    UnloadTexture(textures.superJump);
+    UnloadTexture(textures.superSwitch);
+    UnloadTexture(textures.superWalk1);
+    UnloadTexture(textures.superWalk2);
+    UnloadTexture(textures.superWalk3);
+}
 
 using Level = std::vector<std::string>;
 
@@ -363,7 +444,9 @@ bool IsSolidTile(
 
     return
         tile == '#' ||
+        tile == 'X' ||
         tile == 'B' ||
+        tile == 'b' ||
         tile == 'N' ||
         tile == 'Q' ||
         tile == 'M' ||
@@ -374,7 +457,9 @@ bool IsSolidTile(
         tile == 'H' ||
         tile == 'h' ||
         tile == 'V' ||
-        tile == 'v';
+        tile == 'v' ||
+        tile == 'R' ||
+        tile == 'r';
 }
 
 Rectangle GetTileRectangle(
@@ -522,7 +607,7 @@ void UpdateBlockBumps(
     );
 }
 
-void StartBrokenBrickAnimation(const Rectangle& block)
+void StartBrokenBrickAnimation(const Rectangle& block, bool blue = false)
 {
     // Original units, scaled from the NES's 16-pixel tile to 48 pixels:
     // horizontal speed is 1 px/frame, while the two rows launch at
@@ -544,7 +629,8 @@ void StartBrokenBrickAnimation(const Rectangle& block)
             {{block.x + rightFragmentOffset, block.y + lowerFragmentOffset},
                 {horizontalSpeed, lowerLaunchSpeed}}
         },
-        0.0f
+        0.0f,
+        blue
     });
 }
 
@@ -638,13 +724,14 @@ Vector2 FindPlayerSpawn(const Level& level)
 }
 
 std::vector<Coin> FindCoinSpawns(
-    const Level& level
+    const Level& level,
+    bool fullTile = false
 )
 {
     std::vector<Coin> coins;
 
-    constexpr float coinWidth = 24.0f;
-    constexpr float coinHeight = 32.0f;
+    float coinWidth = fullTile ? tileSize : 24.0f;
+    float coinHeight = fullTile ? tileSize : 32.0f;
 
     for (int row = 0; row < GetLevelRows(level); ++row)
     {
@@ -1838,6 +1925,7 @@ void ResolvePlayerVerticalCollisions(
 
                 if (
                     hitTile == 'B' ||
+                    hitTile == 'b' ||
                     hitTile == 'N' ||
                     hitTile == 'M' ||
                     hitTile == 'A' ||
@@ -1854,17 +1942,21 @@ void ResolvePlayerVerticalCollisions(
                     );
                 }
 
-                if (hitTile == 'B' && player.big)
+                if (
+                    (hitTile == 'B' || hitTile == 'b') &&
+                    player.big
+                )
                 {
+                    bool blueBrick = hitTile == 'b';
                     hitTile = '.';
-                    StartBrokenBrickAnimation(tile);
+                    StartBrokenBrickAnimation(tile, blueBrick);
 
                     // SMB gives Mario a small upward rebound when the
                     // brick gives way instead of stopping him dead.
                     player.velocity.y =
                         -2.0f * 3.0f * nesNtscFrameRate;
                 }
-                else if (hitTile == 'B')
+                else if (hitTile == 'B' || hitTile == 'b')
                 {
                     StartBlockBump(tileRow, tileColumn);
                 }
@@ -2407,7 +2499,13 @@ void UpdateKoopas(
                 koopa.shellReviveTimer - deltaTime
             );
 
-            if (koopa.shellReviveTimer <= 0.0f)
+            bool stationaryShell =
+                std::abs(koopa.velocity.x) <= 1.0f;
+
+            if (
+                stationaryShell &&
+                koopa.shellReviveTimer <= 0.0f
+            )
             {
                 float feet = koopa.body.y + koopa.body.height;
                 float centre = koopa.body.x + koopa.body.width / 2.0f;
@@ -2611,6 +2709,7 @@ bool HandlePlayerKoopaCollisions(
             {
                 // Stomping a moving shell brings it to a halt.
                 koopa.velocity.x = 0.0f;
+                koopa.shellReviveTimer = koopaShellReviveDuration;
             }
             else
             {
@@ -2793,6 +2892,158 @@ void HandleStationaryShellEnemyCollisions(
     }
 }
 
+void HandleOrdinaryEnemyCollisions(
+    std::vector<Goomba>& goombas,
+    std::vector<Koopa>& koopas,
+    const Camera2D& camera
+)
+{
+    float halfVisibleWidth =
+        virtualWidth / (2.0f * camera.zoom);
+    float halfVisibleHeight =
+        virtualHeight / (2.0f * camera.zoom);
+    float viewportLeft = camera.target.x - halfVisibleWidth;
+    float viewportRight = camera.target.x + halfVisibleWidth;
+    float viewportTop = camera.target.y - halfVisibleHeight;
+    float viewportBottom = camera.target.y + halfVisibleHeight;
+
+    auto fullyVisible = [=](const Rectangle& body)
+    {
+        return
+            body.x >= viewportLeft &&
+            body.x + body.width <= viewportRight &&
+            body.y >= viewportTop &&
+            body.y + body.height <= viewportBottom;
+    };
+
+    auto turnBothAround = [](
+        Rectangle& firstBody,
+        Vector2& firstVelocity,
+        Rectangle& secondBody,
+        Vector2& secondVelocity
+    )
+    {
+        if (!CheckCollisionRecs(firstBody, secondBody))
+        {
+            return;
+        }
+
+        // SMB remembers a contact until the bounding boxes separate so the
+        // enemies only reverse once. Separating the overlapping bodies here
+        // provides the same one-contact response without persistent pair bits.
+        float overlap = std::min(
+            firstBody.x + firstBody.width,
+            secondBody.x + secondBody.width
+        ) - std::max(firstBody.x, secondBody.x);
+
+        float firstCentre = firstBody.x + firstBody.width / 2.0f;
+        float secondCentre = secondBody.x + secondBody.width / 2.0f;
+        float firstCorrection = overlap / 2.0f;
+        float secondCorrection = overlap - firstCorrection;
+
+        if (firstCentre <= secondCentre)
+        {
+            firstBody.x -= firstCorrection;
+            secondBody.x += secondCorrection;
+        }
+        else
+        {
+            firstBody.x += secondCorrection;
+            secondBody.x -= firstCorrection;
+        }
+
+        firstVelocity.x = -firstVelocity.x;
+        secondVelocity.x = -secondVelocity.x;
+    };
+
+    for (std::size_t first = 0; first < goombas.size(); ++first)
+    {
+        Goomba& firstGoomba = goombas[first];
+        if (
+            !firstGoomba.alive ||
+            firstGoomba.dying ||
+            !firstGoomba.spawned ||
+            !fullyVisible(firstGoomba.body)
+        )
+        {
+            continue;
+        }
+
+        for (std::size_t second = first + 1; second < goombas.size(); ++second)
+        {
+            Goomba& secondGoomba = goombas[second];
+            if (
+                secondGoomba.alive &&
+                !secondGoomba.dying &&
+                secondGoomba.spawned &&
+                fullyVisible(secondGoomba.body)
+            )
+            {
+                turnBothAround(
+                    firstGoomba.body,
+                    firstGoomba.velocity,
+                    secondGoomba.body,
+                    secondGoomba.velocity
+                );
+            }
+        }
+
+        for (Koopa& koopa : koopas)
+        {
+            if (
+                koopa.alive &&
+                !koopa.dying &&
+                koopa.spawned &&
+                !koopa.shelled &&
+                fullyVisible(koopa.body)
+            )
+            {
+                turnBothAround(
+                    firstGoomba.body,
+                    firstGoomba.velocity,
+                    koopa.body,
+                    koopa.velocity
+                );
+            }
+        }
+    }
+
+    for (std::size_t first = 0; first < koopas.size(); ++first)
+    {
+        Koopa& firstKoopa = koopas[first];
+        if (
+            !firstKoopa.alive ||
+            firstKoopa.dying ||
+            !firstKoopa.spawned ||
+            firstKoopa.shelled ||
+            !fullyVisible(firstKoopa.body)
+        )
+        {
+            continue;
+        }
+
+        for (std::size_t second = first + 1; second < koopas.size(); ++second)
+        {
+            Koopa& secondKoopa = koopas[second];
+            if (
+                secondKoopa.alive &&
+                !secondKoopa.dying &&
+                secondKoopa.spawned &&
+                !secondKoopa.shelled &&
+                fullyVisible(secondKoopa.body)
+            )
+            {
+                turnBothAround(
+                    firstKoopa.body,
+                    firstKoopa.velocity,
+                    secondKoopa.body,
+                    secondKoopa.velocity
+                );
+            }
+        }
+    }
+}
+
 // --------------------------------------------------
 // Drawing
 // --------------------------------------------------
@@ -2899,10 +3150,24 @@ void DrawLevel(
                     );
                     break;
 
+                case 'X':
+                    DrawTextureAsTile(
+                        textures.blueGround,
+                        destination
+                    );
+                    break;
+
                 case 'B':
                 case 'N':
                     DrawTextureAsTile(
                         textures.brick,
+                        destination
+                    );
+                    break;
+
+                case 'b':
+                    DrawTextureAsTile(
+                        textures.blueBrick,
                         destination
                     );
                     break;
@@ -3007,6 +3272,38 @@ void DrawLevel(
                     );
                     break;
                 }
+
+                case 'R':
+                {
+                    Rectangle source{
+                        0.0f,
+                        0.0f,
+                        static_cast<float>(textures.pipe.width),
+                        static_cast<float>(textures.pipe.height)
+                    };
+                    Rectangle pipeDestination{
+                        destination.x + tileSize,
+                        destination.y + tileSize,
+                        tileSize * 2.0f,
+                        tileSize * 2.0f
+                    };
+
+                    DrawTexturePro(
+                        textures.pipe,
+                        source,
+                        pipeDestination,
+                        {
+                            static_cast<float>(tileSize),
+                            static_cast<float>(tileSize)
+                        },
+                        -90.0f,
+                        WHITE
+                    );
+                    break;
+                }
+
+                case 'r':
+                    break;
 
                 default:
                     break;
@@ -3144,6 +3441,7 @@ void DrawOpeningTitle(const Texture2D& texture)
 void DrawBrokenBrickAnimations(
     const std::vector<BrokenBrickAnimation>& animations,
     const Texture2D& brokenBrick,
+    const Texture2D& blueBrokenBrick,
     const Texture2D& piece1,
     const Texture2D& piece2
 )
@@ -3162,40 +3460,62 @@ void DrawBrokenBrickAnimations(
     {
         if (animation.age < impactFrameDuration)
         {
+            const Texture2D& impactTexture = animation.blue
+                ? blueBrokenBrick
+                : brokenBrick;
             Rectangle source{
                 0.0f,
                 0.0f,
-                static_cast<float>(brokenBrick.width),
-                static_cast<float>(brokenBrick.height)
+                static_cast<float>(impactTexture.width),
+                static_cast<float>(impactTexture.height)
             };
             DrawTextureInsideRectangle(
-                brokenBrick,
+                impactTexture,
                 source,
                 animation.originalBlock
             );
             continue;
         }
 
-        for (const BrickFragment& fragment : animation.fragments)
+        for (int index = 0; index < 4; ++index)
         {
+            const BrickFragment& fragment = animation.fragments[index];
             Rectangle destination{
                 fragment.position.x,
                 fragment.position.y,
                 fragmentSize,
                 fragmentSize
             };
-            DrawTextureInsideRectangle(
-                pieceTexture,
-                pieceSource,
-                destination
-            );
+            if (animation.blue)
+            {
+                Rectangle bluePieceSource{
+                    static_cast<float>((index % 2) * 8),
+                    static_cast<float>((index / 2) * 8),
+                    8.0f,
+                    8.0f
+                };
+                DrawTextureInsideRectangle(
+                    blueBrokenBrick,
+                    bluePieceSource,
+                    destination
+                );
+            }
+            else
+            {
+                DrawTextureInsideRectangle(
+                    pieceTexture,
+                    pieceSource,
+                    destination
+                );
+            }
         }
     }
 }
 
 void DrawPlayer(
     const Player& player,
-    const GameTextures& textures
+    const GameTextures& textures,
+    bool forceIdle = false
 )
 {
     if (
@@ -3227,13 +3547,119 @@ void DrawPlayer(
         &textures.fireMarioWalk3
     };
 
+    bool usingSpecialStarPalette = false;
+
+    if (!player.dying && player.star)
+    {
+        // SMB cycles four sprite palettes from the global frame counter.
+        // The final eight 21-frame intervals slow from every two frames
+        // to every eight frames to warn that star power is ending.
+        constexpr float slowCycleDuration =
+            8.0f * 21.0f / nesNtscFrameRate;
+        int framesPerColour =
+            player.starTimer <= slowCycleDuration ? 8 : 2;
+        int nesFrame = static_cast<int>(GetTime() * nesNtscFrameRate);
+        int palette = (nesFrame / framesPerColour) & 0x03;
+
+        const StarMarioTextures* starTextures = nullptr;
+
+        if (palette == 1)
+        {
+            starTextures = &textures.greenStarMario;
+        }
+        else if (palette == 2)
+        {
+            starTextures = &textures.redStarMario;
+        }
+        else if (palette == 3)
+        {
+            starTextures = &textures.brownStarMario;
+        }
+
+        if (starTextures != nullptr)
+        {
+            usingSpecialStarPalette = true;
+            const Texture2D* starSmallWalkTextures[] = {
+                &starTextures->smallWalk1,
+                &starTextures->smallWalk2,
+                &starTextures->smallWalk3
+            };
+            const Texture2D* starSuperWalkTextures[] = {
+                &starTextures->superWalk1,
+                &starTextures->superWalk2,
+                &starTextures->superWalk3
+            };
+            int frame = player.walkAnimationFrame % 3;
+
+            if (player.big)
+            {
+                if (forceIdle)
+                {
+                    texture = &starTextures->super;
+                }
+                else if (player.ducking)
+                {
+                    texture = &starTextures->superDuck;
+                }
+                else if (player.fireThrowTimer > 0.0f && player.fire)
+                {
+                    texture = &starTextures->superFire;
+                }
+                else if (!player.onGround)
+                {
+                    texture = &starTextures->superJump;
+                }
+                else if (player.skidding)
+                {
+                    texture = &starTextures->superSwitch;
+                }
+                else if (std::abs(player.velocity.x) > 5.0f)
+                {
+                    texture = starSuperWalkTextures[frame];
+                }
+                else
+                {
+                    texture = &starTextures->super;
+                }
+            }
+            else if (forceIdle)
+            {
+                texture = &starTextures->small;
+            }
+            else if (!player.onGround)
+            {
+                texture = &starTextures->smallJump;
+            }
+            else if (player.skidding)
+            {
+                texture = &starTextures->smallSwitch;
+            }
+            else if (std::abs(player.velocity.x) > 5.0f)
+            {
+                texture = starSmallWalkTextures[frame];
+            }
+            else
+            {
+                texture = &starTextures->small;
+            }
+        }
+    }
+
     if (player.dying)
     {
         texture = &textures.marioDead;
     }
-    else if (player.star)
+    else if (usingSpecialStarPalette)
     {
-        texture = &textures.starMario;
+        // The state-specific special-palette texture was chosen above.
+    }
+    else if (forceIdle)
+    {
+        texture = player.fire
+            ? &textures.fireMario
+            : (player.big
+                ? &textures.superMario
+                : &textures.player);
     }
     else if (player.ducking)
     {
@@ -3498,6 +3924,40 @@ void DrawCoins(
             0.0f,
             WHITE
         );
+    }
+}
+
+void DrawBlueCoins(
+    const std::vector<Coin>& coins,
+    const Texture2D& texture1,
+    const Texture2D& texture2,
+    const Texture2D& texture3
+)
+{
+    const Texture2D* frames[] = {&texture1, &texture2, &texture3};
+    constexpr int sequence[] = {0, 0, 0, 1, 2, 1};
+    int nesFrame = static_cast<int>(GetTime() * nesNtscFrameRate);
+    const Texture2D& texture = *frames[sequence[(nesFrame / 8) % 6]];
+    Rectangle source{
+        0.0f,
+        0.0f,
+        static_cast<float>(texture.width),
+        static_cast<float>(texture.height)
+    };
+
+    for (const Coin& coin : coins)
+    {
+        if (!coin.collected)
+        {
+            DrawTexturePro(
+                texture,
+                source,
+                coin.body,
+                {0.0f, 0.0f},
+                0.0f,
+                WHITE
+            );
+        }
     }
 }
 
@@ -3879,6 +4339,13 @@ int main()
 
     constexpr float jumpBufferDuration = 0.12f;
     constexpr float coyoteTimeDuration = 0.06f;
+    constexpr int bonusEntrancePipeColumn = 65;
+    constexpr int bonusEntrancePipeRow = 8;
+    constexpr int bonusExitPipeColumn = 17;
+    constexpr int bonusExitGroundRow = 12;
+    constexpr int overworldReturnPipeColumn = 171;
+    constexpr int overworldReturnPipeRow = 10;
+    constexpr float pipeTravelSpeed = 3.0f * nesNtscFrameRate;
 
     Level level{
         "............................................................................................................................................................................................................................",
@@ -3899,13 +4366,36 @@ int main()
         "#############################################################################..###############...################################################################..#########################################################"
     };
 
+    Level bonusLevel{
+        "......P.................",
+        "bbbbb...bbbbbbb....Vv...",
+        "bbbbb..............Vv...",
+        "bbbbb..............Vv...",
+        "bbbbb....CCCCC.....Vv...",
+        "bbbbb..............Vv...",
+        "bbbbb...CCCCCCC....Vv...",
+        "bbbbb..............Vv...",
+        "bbbbb...CCCCCCC....Vv...",
+        "bbbbb...bbbbbbb....Vv...",
+        "bbbbb...bbbbbbb..RrVv...",
+        "bbbbb...bbbbbbb..rrVv...",
+        "XXXXXXXXXXXXXXXXXXXXXXXX",
+        "XXXXXXXXXXXXXXXXXXXXXXXX",
+        "XXXXXXXXXXXXXXXXXXXXXXXX",
+        "XXXXXXXXXXXXXXXXXXXXXXXX"
+    };
+
     NormaliseLevel(level);
+    NormaliseLevel(bonusLevel);
 
     const Level initialLevel = level;
+    const Level initialBonusLevel = bonusLevel;
 
     if (
         level.empty() ||
-        GetLevelColumns(level) == 0
+        GetLevelColumns(level) == 0 ||
+        bonusLevel.empty() ||
+        GetLevelColumns(bonusLevel) == 0
     )
     {
         TraceLog(
@@ -3930,19 +4420,15 @@ int main()
     SetWindowMinSize(640, 360);
     SetTargetFPS(60);
 
-    int starMarioFrameCount = 0;
-    Image starMarioImage = LoadImageAnim(
-        "resources/Mario/Star_Mario.gif",
-        &starMarioFrameCount
-    );
-    Texture2D starMarioTexture = LoadTextureFromImage(starMarioImage);
-
     GameTextures textures{
         LoadTexture("resources/Blocks/Ground.png"),
         LoadTexture("resources/Blocks/Brick.png"),
         LoadTexture("resources/Blocks/Broken_Brick.png"),
         LoadTexture("resources/Blocks/Brick_Piece_1.png"),
         LoadTexture("resources/Blocks/Brick_Piece_2.png"),
+        LoadTexture("resources/Blocks/Blue_Ground.png"),
+        LoadTexture("resources/Blocks/Blue_Brick.png"),
+        LoadTexture("resources/Blocks/Blue_Broken_Brick.png"),
         LoadTexture("resources/Blocks/Q_Block_1.png"),
         LoadTexture("resources/Blocks/Q_Block_2.png"),
         LoadTexture("resources/Blocks/Q_Block_3.png"),
@@ -3955,6 +4441,9 @@ int main()
         LoadTexture("resources/Coin_Flash_2.png"),
         LoadTexture("resources/Coin_Flash_3.png"),
         LoadTexture("resources/Coin_Flash_4.png"),
+        LoadTexture("resources/Blue_Coin_1.png"),
+        LoadTexture("resources/Blue_Coin_2.png"),
+        LoadTexture("resources/Blue_Coin_3.png"),
         LoadTexture("resources/Background/Big_Hill.png"),
         LoadTexture("resources/Background/Small_Hill.png"),
         LoadTexture("resources/Background/Single_Bush.png"),
@@ -4001,7 +4490,54 @@ int main()
         LoadTexture("resources/Items/Star_2.png"),
         LoadTexture("resources/Items/Star_3.png"),
         LoadTexture("resources/Items/Star_4.png"),
-        starMarioTexture,
+        {
+            LoadTexture("resources/Mario/Star_Mario/Brown_Small_Mario.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Small_Mario_Jump.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Small_Mario_Switch.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Small_Mario_Walk_1.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Small_Mario_Walk_2.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Small_Mario_Walk_3.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Super_Mario.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Super_Mario_Duck.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Super_Mario_Fire.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Super_Mario_Jump.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Super_Mario_Switch.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Super_Mario_Walk_1.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Super_Mario_Walk_2.png"),
+            LoadTexture("resources/Mario/Star_Mario/Brown_Super_Mario_Walk_3.png")
+        },
+        {
+            LoadTexture("resources/Mario/Star_Mario/Green_Small_Mario.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Small_Mario_Jump.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Small_Mario_Switch.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Small_Mario_Walk_1.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Small_Mario_Walk_2.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Small_Mario_Walk_3.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Super_Mario.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Super_Mario_Duck.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Super_Mario_Fire.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Super_Mario_Jump.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Super_Mario_Switch.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Super_Mario_Walk_1.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Super_Mario_Walk_2.png"),
+            LoadTexture("resources/Mario/Star_Mario/Green_Super_Mario_Walk_3.png")
+        },
+        {
+            LoadTexture("resources/Mario/Star_Mario/Red_Small_Mario.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Small_Mario_Jump.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Small_Mario_Switch.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Small_Mario_Walk_1.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Small_Mario_Walk_2.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Small_Mario_Walk_3.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Super_Mario.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Super_Mario_Duck.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Super_Mario_Fire.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Super_Mario_Jump.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Super_Mario_Switch.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Super_Mario_Walk_1.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Super_Mario_Walk_2.png"),
+            LoadTexture("resources/Mario/Star_Mario/Red_Super_Mario_Walk_3.png")
+        },
         LoadTexture("resources/Fire_Ball.png"),
         LoadTexture("resources/Fire_Ball_Hit_1.png"),
         LoadTexture("resources/Fire_Ball_Hit_2.png"),
@@ -4022,6 +4558,9 @@ int main()
     SetTextureFilter(textures.brokenBrick, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.brickPiece1, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.brickPiece2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.blueGround, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.blueBrick, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.blueBrokenBrick, TEXTURE_FILTER_POINT);
 
     SetTextureFilter(textures.questionBlock1, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.questionBlock2, TEXTURE_FILTER_POINT);
@@ -4049,6 +4588,9 @@ int main()
     SetTextureFilter(textures.coinFlash2, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.coinFlash3, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.coinFlash4, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.blueCoin1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.blueCoin2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(textures.blueCoin3, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.bigHill, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.smallHill, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.singleBush, TEXTURE_FILTER_POINT);
@@ -4107,7 +4649,9 @@ int main()
     SetTextureFilter(textures.star2, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.star3, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.star4, TEXTURE_FILTER_POINT);
-    SetTextureFilter(textures.starMario, TEXTURE_FILTER_POINT);
+    SetStarMarioTextureFilter(textures.brownStarMario);
+    SetStarMarioTextureFilter(textures.greenStarMario);
+    SetStarMarioTextureFilter(textures.redStarMario);
     SetTextureFilter(textures.fireBall, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.fireBallHit1, TEXTURE_FILTER_POINT);
     SetTextureFilter(textures.fireBallHit2, TEXTURE_FILTER_POINT);
@@ -4120,6 +4664,9 @@ int main()
         textures.brokenBrick.id == 0 ||
         textures.brickPiece1.id == 0 ||
         textures.brickPiece2.id == 0 ||
+        textures.blueGround.id == 0 ||
+        textures.blueBrick.id == 0 ||
+        textures.blueBrokenBrick.id == 0 ||
         textures.questionBlock1.id == 0 ||
         textures.questionBlock2.id == 0 ||
         textures.questionBlock3.id == 0 ||
@@ -4159,6 +4706,9 @@ int main()
         textures.coinFlash2.id == 0 ||
         textures.coinFlash3.id == 0 ||
         textures.coinFlash4.id == 0 ||
+        textures.blueCoin1.id == 0 ||
+        textures.blueCoin2.id == 0 ||
+        textures.blueCoin3.id == 0 ||
         textures.bigHill.id == 0 ||
         textures.smallHill.id == 0 ||
         textures.singleBush.id == 0 ||
@@ -4175,7 +4725,9 @@ int main()
         textures.star2.id == 0 ||
         textures.star3.id == 0 ||
         textures.star4.id == 0 ||
-        textures.starMario.id == 0 ||
+        !AreStarMarioTexturesLoaded(textures.brownStarMario) ||
+        !AreStarMarioTexturesLoaded(textures.greenStarMario) ||
+        !AreStarMarioTexturesLoaded(textures.redStarMario) ||
         textures.fireBall.id == 0 ||
         textures.fireBallHit1.id == 0 ||
         textures.fireBallHit2.id == 0 ||
@@ -4193,6 +4745,9 @@ int main()
         UnloadTexture(textures.brokenBrick);
         UnloadTexture(textures.brickPiece1);
         UnloadTexture(textures.brickPiece2);
+        UnloadTexture(textures.blueGround);
+        UnloadTexture(textures.blueBrick);
+        UnloadTexture(textures.blueBrokenBrick);
         UnloadTexture(textures.questionBlock1);
         UnloadTexture(textures.questionBlock2);
         UnloadTexture(textures.questionBlock3);
@@ -4232,6 +4787,9 @@ int main()
         UnloadTexture(textures.coinFlash2);
         UnloadTexture(textures.coinFlash3);
         UnloadTexture(textures.coinFlash4);
+        UnloadTexture(textures.blueCoin1);
+        UnloadTexture(textures.blueCoin2);
+        UnloadTexture(textures.blueCoin3);
         UnloadTexture(textures.bigHill);
         UnloadTexture(textures.smallHill);
         UnloadTexture(textures.singleBush);
@@ -4248,8 +4806,9 @@ int main()
         UnloadTexture(textures.star2);
         UnloadTexture(textures.star3);
         UnloadTexture(textures.star4);
-        UnloadTexture(textures.starMario);
-        UnloadImage(starMarioImage);
+        UnloadStarMarioTextures(textures.brownStarMario);
+        UnloadStarMarioTextures(textures.greenStarMario);
+        UnloadStarMarioTextures(textures.redStarMario);
         UnloadTexture(textures.fireBall);
         UnloadTexture(textures.fireBallHit1);
         UnloadTexture(textures.fireBallHit2);
@@ -4311,6 +4870,12 @@ int main()
     std::vector<Coin> coins =
         initialCoins;
 
+    const std::vector<Coin> initialBonusCoins =
+        FindCoinSpawns(bonusLevel, true);
+
+    std::vector<Coin> bonusCoins =
+        initialBonusCoins;
+
     std::vector<BlockCoin> blockCoins;
 
     int coinCount = 0;
@@ -4326,6 +4891,41 @@ int main()
 
     std::vector<Koopa> koopas =
         initialKoopas;
+
+    std::vector<Goomba> otherAreaGoombas;
+    std::vector<Koopa> otherAreaKoopas;
+    std::vector<SuperMushroom> otherAreaMushrooms;
+    std::vector<FireFlower> otherAreaFireFlowers;
+    std::vector<SuperStar> otherAreaStars;
+    std::vector<FireBall> otherAreaFireBalls;
+
+    bool inBonusArea = false;
+
+    enum class PipeTransition
+    {
+        None,
+        EnteringBonusDown,
+        EnteringOverworldRight,
+        EmergingOverworldUp
+    };
+
+    PipeTransition pipeTransition = PipeTransition::None;
+
+    auto swapAreaState = [&]()
+    {
+        level.swap(bonusLevel);
+        coins.swap(bonusCoins);
+        goombas.swap(otherAreaGoombas);
+        koopas.swap(otherAreaKoopas);
+        mushrooms.swap(otherAreaMushrooms);
+        fireFlowers.swap(otherAreaFireFlowers);
+        stars.swap(otherAreaStars);
+        fireBalls.swap(otherAreaFireBalls);
+        blockCoins.clear();
+        blockBumps.clear();
+        brokenBrickAnimations.clear();
+        multiCoinBlocks.clear();
+    };
 
     Camera2D camera{};
 
@@ -4346,7 +4946,7 @@ int main()
     float coyoteTimer = 0.0f;
     float pitRespawnTimer = 0.0f;
     bool pitDeathPending = false;
-    int displayedStarMarioFrame = -1;
+    int lastEnemyCollisionFrame = -1;
 
     while (!WindowShouldClose())
     {
@@ -4355,24 +4955,6 @@ int main()
                 GetFrameTime(),
                 0.05f
             );
-
-        if (starMarioFrameCount > 0 && starMarioImage.data != nullptr)
-        {
-            int frame = static_cast<int>(GetTime() * 12.0) %
-                starMarioFrameCount;
-
-            if (frame != displayedStarMarioFrame)
-            {
-                int frameDataSize =
-                    starMarioImage.width * starMarioImage.height * 4;
-                unsigned char* frameData =
-                    static_cast<unsigned char*>(starMarioImage.data) +
-                    frame * frameDataSize;
-
-                UpdateTexture(textures.starMario, frameData);
-                displayedStarMarioFrame = frame;
-            }
-        }
 
         player.invulnerabilityTimer = std::max(
             0.0f,
@@ -4424,6 +5006,169 @@ int main()
             koopas
         );
         UpdateBrokenBrickAnimations(deltaTime);
+
+        if (
+            pipeTransition == PipeTransition::None &&
+            !player.dying &&
+            player.onGround
+        )
+        {
+            if (!inBonusArea && (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)))
+            {
+                float pipeLeft = bonusEntrancePipeColumn * tileSize;
+                float pipeRight =
+                    (bonusEntrancePipeColumn + 2) * tileSize;
+                float pipeTop = bonusEntrancePipeRow * tileSize;
+                float playerCentre =
+                    player.body.x + player.body.width / 2.0f;
+                float playerBottom =
+                    player.body.y + player.body.height;
+
+                if (
+                    playerCentre >= pipeLeft &&
+                    playerCentre <= pipeRight &&
+                    std::abs(playerBottom - pipeTop) <= 4.0f
+                )
+                {
+                    SetPlayerDucking(player, false, level);
+                    player.body.x = pipeLeft +
+                        (tileSize * 2.0f - player.body.width) / 2.0f;
+                    player.body.y = pipeTop - player.body.height;
+                    player.velocity = {0.0f, 0.0f};
+                    player.onGround = false;
+                    player.skidding = false;
+                    player.sprinting = false;
+                    pipeTransition = PipeTransition::EnteringBonusDown;
+                }
+            }
+            else if (
+                inBonusArea &&
+                (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT))
+            )
+            {
+                float pipeLeft = bonusExitPipeColumn * tileSize;
+                float groundTop = bonusExitGroundRow * tileSize;
+                float playerRight = player.body.x + player.body.width;
+                float playerBottom = player.body.y + player.body.height;
+
+                if (
+                    std::abs(playerRight - pipeLeft) <= 2.0f &&
+                    std::abs(playerBottom - groundTop) <= 4.0f
+                )
+                {
+                    SetPlayerDucking(player, false, level);
+                    player.body.x = pipeLeft - player.body.width;
+                    player.body.y = groundTop - player.body.height;
+                    player.velocity = {0.0f, 0.0f};
+                    player.facingLeft = false;
+                    player.skidding = false;
+                    player.sprinting = false;
+                    pipeTransition =
+                        PipeTransition::EnteringOverworldRight;
+                }
+            }
+        }
+
+        if (pipeTransition != PipeTransition::None)
+        {
+            player.velocity = {0.0f, 0.0f};
+            player.ducking = false;
+            player.skidding = false;
+            player.sprinting = false;
+            player.walkAnimationTimer = 0.0f;
+            player.walkAnimationFrame = 0;
+            jumpBufferTimer = 0.0f;
+            coyoteTimer = 0.0f;
+
+            if (pipeTransition == PipeTransition::EnteringBonusDown)
+            {
+                float pipeTop = bonusEntrancePipeRow * tileSize;
+                player.body.y = std::min(
+                    pipeTop,
+                    player.body.y + pipeTravelSpeed * deltaTime
+                );
+
+                if (player.body.y >= pipeTop)
+                {
+                    swapAreaState();
+                    inBonusArea = true;
+
+                    Vector2 bonusSpawn = FindPlayerSpawn(level);
+                    player.body.x = bonusSpawn.x +
+                        (tileSize - player.body.width) / 2.0f;
+                    player.body.y = -player.body.height;
+                    player.onGround = false;
+                    camera.target = {
+                        virtualWidth / 2.0f,
+                        virtualHeight / 2.0f
+                    };
+                    pipeTransition = PipeTransition::None;
+                }
+            }
+            else if (
+                pipeTransition == PipeTransition::EnteringOverworldRight
+            )
+            {
+                float pipeLeft = bonusExitPipeColumn * tileSize;
+                player.body.x = std::min(
+                    pipeLeft,
+                    player.body.x + pipeTravelSpeed * deltaTime
+                );
+
+                if (player.body.x >= pipeLeft)
+                {
+                    swapAreaState();
+                    inBonusArea = false;
+
+                    float returnPipeLeft =
+                        overworldReturnPipeColumn * tileSize;
+                    float returnPipeTop =
+                        overworldReturnPipeRow * tileSize;
+
+                    player.body.x = returnPipeLeft +
+                        (tileSize * 2.0f - player.body.width) / 2.0f;
+                    player.body.y = returnPipeTop;
+                    player.onGround = false;
+
+                    float halfVisibleWidth =
+                        virtualWidth / (2.0f * camera.zoom);
+                    camera.target = {
+                        std::clamp(
+                            player.body.x + player.body.width / 2.0f,
+                            halfVisibleWidth,
+                            GetLevelWidth(level) - halfVisibleWidth
+                        ),
+                        virtualHeight / 2.0f
+                    };
+
+                    // The overworld becomes visible immediately while Mario
+                    // rises from the pipe. Activate enemies against the new
+                    // camera now so none pop in after the transition ends.
+                    SpawnGoombasNearCamera(goombas, camera);
+                    SpawnKoopasNearCamera(koopas, camera);
+                    pipeTransition = PipeTransition::EmergingOverworldUp;
+                }
+            }
+            else if (pipeTransition == PipeTransition::EmergingOverworldUp)
+            {
+                float pipeTop = overworldReturnPipeRow * tileSize;
+                float destinationY = pipeTop - player.body.height;
+                player.body.y = std::max(
+                    destinationY,
+                    player.body.y - pipeTravelSpeed * deltaTime
+                );
+
+                if (player.body.y <= destinationY)
+                {
+                    player.body.y = destinationY;
+                    player.onGround = true;
+                    coyoteTimer = coyoteTimeDuration;
+                    pipeTransition = PipeTransition::None;
+                }
+            }
+        }
+        else
+        {
 
         bool wasOnGround =
             player.onGround;
@@ -4859,6 +5604,18 @@ int main()
             deltaTime
         );
 
+        // The original checks enemy pairs only on odd NES frames.
+        int enemyCollisionFrame =
+            static_cast<int>(GetTime() * nesNtscFrameRate);
+        if (
+            (enemyCollisionFrame & 0x01) != 0 &&
+            enemyCollisionFrame != lastEnemyCollisionFrame
+        )
+        {
+            HandleOrdinaryEnemyCollisions(goombas, koopas, camera);
+            lastEnemyCollisionFrame = enemyCollisionFrame;
+        }
+
         HandleStationaryShellEnemyCollisions(
             koopas,
             goombas
@@ -4954,6 +5711,12 @@ int main()
 
         if (pitRespawnReady || deathAnimationFinished)
         {
+            if (inBonusArea)
+            {
+                swapAreaState();
+                inBonusArea = false;
+            }
+
             RespawnPlayer(
                 player,
                 spawn,
@@ -4975,6 +5738,15 @@ int main()
                 jumpBufferTimer,
                 coyoteTimer
             );
+
+            bonusLevel = initialBonusLevel;
+            bonusCoins = initialBonusCoins;
+            otherAreaGoombas.clear();
+            otherAreaKoopas.clear();
+            otherAreaMushrooms.clear();
+            otherAreaFireFlowers.clear();
+            otherAreaStars.clear();
+            otherAreaFireBalls.clear();
 
             pitRespawnTimer = 0.0f;
             pitDeathPending = false;
@@ -5057,21 +5829,30 @@ int main()
             }
         }
 
+        }
+
         // --------------------------------
         // Draw virtual game screen
         // --------------------------------
 
         BeginTextureMode(gameTexture);
 
-        ClearBackground({146, 144, 255, 255});
+        ClearBackground(
+            inBonusArea
+                ? BLACK
+                : Color{146, 144, 255, 255}
+        );
 
         BeginMode2D(camera);
 
-        DrawBackgroundScenery(level, textures);
+        if (!inBonusArea)
+        {
+            DrawBackgroundScenery(level, textures);
 
-        // Keep the logo in the opening area's world space so it begins
-        // centred on screen, then naturally scrolls away with the level.
-        DrawOpeningTitle(textures.title);
+            // Keep the logo in the opening area's world space so it begins
+            // centred on screen, then naturally scrolls away with the level.
+            DrawOpeningTitle(textures.title);
+        }
 
         // Draw items behind tiles so mushrooms rise out of blocks.
         DrawSuperMushrooms(
@@ -5096,6 +5877,14 @@ int main()
             textures.star4
         );
 
+        bool drawPlayerBehindTiles =
+            pipeTransition != PipeTransition::None;
+
+        if (drawPlayerBehindTiles)
+        {
+            DrawPlayer(player, textures, true);
+        }
+
         DrawLevel(
             level,
             textures
@@ -5104,14 +5893,27 @@ int main()
         DrawBrokenBrickAnimations(
             brokenBrickAnimations,
             textures.brokenBrick,
+            textures.blueBrokenBrick,
             textures.brickPiece1,
             textures.brickPiece2
         );
 
-        DrawCoins(
-            coins,
-            textures.coin
-        );
+        if (inBonusArea)
+        {
+            DrawBlueCoins(
+                coins,
+                textures.blueCoin1,
+                textures.blueCoin2,
+                textures.blueCoin3
+            );
+        }
+        else
+        {
+            DrawCoins(
+                coins,
+                textures.coin
+            );
+        }
 
         DrawBlockCoins(
             blockCoins,
@@ -5156,10 +5958,10 @@ int main()
             textures.fireBallHit3
         );
 
-        DrawPlayer(
-            player,
-            textures
-        );
+        if (!drawPlayerBehindTiles)
+        {
+            DrawPlayer(player, textures);
+        }
 
         if (IsKeyDown(KEY_F1))
         {
@@ -5280,6 +6082,9 @@ int main()
     UnloadTexture(textures.brokenBrick);
     UnloadTexture(textures.brickPiece1);
     UnloadTexture(textures.brickPiece2);
+    UnloadTexture(textures.blueGround);
+    UnloadTexture(textures.blueBrick);
+    UnloadTexture(textures.blueBrokenBrick);
     UnloadTexture(textures.questionBlock1);
     UnloadTexture(textures.questionBlock2);
     UnloadTexture(textures.questionBlock3);
@@ -5292,6 +6097,9 @@ int main()
     UnloadTexture(textures.coinFlash2);
     UnloadTexture(textures.coinFlash3);
     UnloadTexture(textures.coinFlash4);
+    UnloadTexture(textures.blueCoin1);
+    UnloadTexture(textures.blueCoin2);
+    UnloadTexture(textures.blueCoin3);
     UnloadTexture(textures.bigHill);
     UnloadTexture(textures.smallHill);
     UnloadTexture(textures.singleBush);
@@ -5338,8 +6146,9 @@ int main()
     UnloadTexture(textures.star2);
     UnloadTexture(textures.star3);
     UnloadTexture(textures.star4);
-    UnloadTexture(textures.starMario);
-    UnloadImage(starMarioImage);
+    UnloadStarMarioTextures(textures.brownStarMario);
+    UnloadStarMarioTextures(textures.greenStarMario);
+    UnloadStarMarioTextures(textures.redStarMario);
     UnloadTexture(textures.fireBall);
     UnloadTexture(textures.fireBallHit1);
     UnloadTexture(textures.fireBallHit2);
