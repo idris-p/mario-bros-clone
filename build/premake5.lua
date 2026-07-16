@@ -198,8 +198,10 @@ if (downloadRaylib) then
         
         files {"../src/**.c", "../src/**.cpp", "../src/**.h", "../src/**.hpp", "../include/**.h", "../include/**.hpp"}
         
-        filter {"system:windows", "action:vs*"}
+        filter "system:windows"
             files {"../src/*.rc", "../src/*.ico"}
+
+        filter {"system:windows", "action:vs*"}
             files {"../resources/**"}
 
         filter{}

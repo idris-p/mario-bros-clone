@@ -25,6 +25,87 @@ constexpr float growthTransformDuration =
     59.0f / nesNtscFrameRate;
 constexpr float growthAnimationDelay =
     7.0f / nesNtscFrameRate;
+constexpr float fireTransformDuration = growthTransformDuration;
+constexpr float marioDeathSoundDuration = 2.7123f;
+constexpr float stageClearSoundDuration = 5.6415f;
+
+struct GameSounds
+{
+    Sound oneUp;
+    Sound breakBlock;
+    Sound bump;
+    Sound coin;
+    Sound fireBall;
+    Sound flagPole;
+    Sound jumpSmall;
+    Sound jumpSuper;
+    Sound kick;
+    Sound marioDie;
+    Sound pipe;
+    Sound powerUp;
+    Sound powerUpAppears;
+    Sound stageClear;
+    Sound stomp;
+};
+
+GameSounds gameSounds{};
+
+void PlayGameSound(const Sound& sound)
+{
+    if (IsSoundValid(sound))
+    {
+        PlaySound(sound);
+    }
+}
+
+bool AreGameSoundsLoaded(const GameSounds& sounds)
+{
+    return
+        IsSoundValid(sounds.oneUp) &&
+        IsSoundValid(sounds.breakBlock) &&
+        IsSoundValid(sounds.bump) &&
+        IsSoundValid(sounds.coin) &&
+        IsSoundValid(sounds.fireBall) &&
+        IsSoundValid(sounds.flagPole) &&
+        IsSoundValid(sounds.jumpSmall) &&
+        IsSoundValid(sounds.jumpSuper) &&
+        IsSoundValid(sounds.kick) &&
+        IsSoundValid(sounds.marioDie) &&
+        IsSoundValid(sounds.pipe) &&
+        IsSoundValid(sounds.powerUp) &&
+        IsSoundValid(sounds.powerUpAppears) &&
+        IsSoundValid(sounds.stageClear) &&
+        IsSoundValid(sounds.stomp);
+}
+
+void UnloadGameSounds(const GameSounds& sounds)
+{
+    const Sound allSounds[] = {
+        sounds.oneUp,
+        sounds.breakBlock,
+        sounds.bump,
+        sounds.coin,
+        sounds.fireBall,
+        sounds.flagPole,
+        sounds.jumpSmall,
+        sounds.jumpSuper,
+        sounds.kick,
+        sounds.marioDie,
+        sounds.pipe,
+        sounds.powerUp,
+        sounds.powerUpAppears,
+        sounds.stageClear,
+        sounds.stomp
+    };
+
+    for (const Sound& sound : allSounds)
+    {
+        if (IsSoundValid(sound))
+        {
+            UnloadSound(sound);
+        }
+    }
+}
 
 struct Player
 {
@@ -46,7 +127,15 @@ struct Player
     float starTimer;
     float damageTransformTimer;
     float growthTransformTimer;
+    float fireTransformTimer;
 };
+
+bool IsPlayerTransforming(const Player& player)
+{
+    return
+        player.growthTransformTimer > 0.0f ||
+        player.fireTransformTimer > 0.0f;
+}
 
 struct SuperMushroom
 {
@@ -113,6 +202,7 @@ void KillGoomba(Goomba& goomba)
 {
     if (goomba.alive && !goomba.dying)
     {
+        PlayGameSound(gameSounds.kick);
         goomba.dying = true;
         goomba.stomped = false;
         goomba.velocity = {0.0f, -240.0f};
@@ -123,6 +213,7 @@ void KillKoopa(Koopa& koopa)
 {
     if (koopa.alive && !koopa.dying)
     {
+        PlayGameSound(gameSounds.kick);
         koopa.dying = true;
         koopa.velocity = {0.0f, -240.0f};
     }
@@ -132,6 +223,7 @@ void KillPlayer(Player& player)
 {
     if (!player.dying)
     {
+        PlayGameSound(gameSounds.marioDie);
         player.dying = true;
         player.velocity = {0.0f, -650.0f};
         player.onGround = false;
@@ -143,6 +235,7 @@ void KillPlayer(Player& player)
         player.starTimer = 0.0f;
         player.damageTransformTimer = 0.0f;
         player.growthTransformTimer = 0.0f;
+        player.fireTransformTimer = 0.0f;
     }
 }
 
@@ -625,6 +718,8 @@ void UpdateBlockBumps(
 
 void StartBrokenBrickAnimation(const Rectangle& block, bool blue = false)
 {
+    PlayGameSound(gameSounds.breakBlock);
+
     // Original units, scaled from the NES's 16-pixel tile to 48 pixels:
     // horizontal speed is 1 px/frame, while the two rows launch at
     // 6 px/frame and 4 px/frame respectively.
@@ -896,6 +991,11 @@ int CollectCoins(
         ++collectedThisFrame;
     }
 
+    if (collectedThisFrame > 0)
+    {
+        PlayGameSound(gameSounds.coin);
+    }
+
     return collectedThisFrame;
 }
 
@@ -1088,8 +1188,11 @@ void CollectSuperMushrooms(
 
         if (mushroom.oneUp)
         {
+            PlayGameSound(gameSounds.oneUp);
             continue;
         }
+
+        PlayGameSound(gameSounds.powerUp);
 
         if (!player.big)
         {
@@ -1144,8 +1247,26 @@ void CollectFireFlowers(
         }
 
         flower.collected = true;
-        player.big = true;
-        player.fire = true;
+        PlayGameSound(gameSounds.powerUp);
+
+        if (!player.big)
+        {
+            player.fire = true;
+            player.growthTransformTimer = growthTransformDuration;
+            player.sprinting = false;
+            player.skidding = false;
+            player.ducking = false;
+        }
+        else
+        {
+            if (!player.fire)
+            {
+                player.fireTransformTimer = fireTransformDuration;
+                player.sprinting = false;
+                player.skidding = false;
+                player.ducking = false;
+            }
+        }
     }
 }
 
@@ -1237,9 +1358,10 @@ void UpdateSuperStars(
     }
 }
 
-void CollectSuperStars(Player& player, std::vector<SuperStar>& stars)
+bool CollectSuperStars(Player& player, std::vector<SuperStar>& stars)
 {
     constexpr float starDuration = 12.0f;
+    bool collectedAny = false;
 
     for (SuperStar& star : stars)
     {
@@ -1253,9 +1375,13 @@ void CollectSuperStars(Player& player, std::vector<SuperStar>& stars)
         }
 
         star.collected = true;
+        collectedAny = true;
+        PlayGameSound(gameSounds.powerUp);
         player.star = true;
         player.starTimer = starDuration;
     }
+
+    return collectedAny;
 }
 
 void StartFireBallImpact(FireBall& fireBall)
@@ -2004,11 +2130,13 @@ void ResolvePlayerVerticalCollisions(
                 else if (hitTile == 'B' || hitTile == 'b')
                 {
                     StartBlockBump(tileRow, tileColumn);
+                    PlayGameSound(gameSounds.bump);
                 }
                 else if (hitTile == 'M')
                 {
                     hitTile = 'E';
                     StartBlockBump(tileRow, tileColumn);
+                    PlayGameSound(gameSounds.powerUpAppears);
 
                     constexpr float mushroomSize =
                         static_cast<float>(tileSize);
@@ -2036,6 +2164,7 @@ void ResolvePlayerVerticalCollisions(
                 {
                     hitTile = 'E';
                     StartBlockBump(tileRow, tileColumn);
+                    PlayGameSound(gameSounds.powerUpAppears);
 
                     constexpr float itemSize =
                         static_cast<float>(tileSize);
@@ -2080,6 +2209,7 @@ void ResolvePlayerVerticalCollisions(
                 {
                     hitTile = 'E';
                     StartBlockBump(tileRow, tileColumn);
+                    PlayGameSound(gameSounds.powerUpAppears);
 
                     constexpr float itemSize =
                         static_cast<float>(tileSize);
@@ -2105,6 +2235,7 @@ void ResolvePlayerVerticalCollisions(
                 {
                     hitTile = 'E';
                     StartBlockBump(tileRow, tileColumn);
+                    PlayGameSound(gameSounds.powerUpAppears);
 
                     constexpr float itemSize =
                         static_cast<float>(tileSize);
@@ -2131,6 +2262,7 @@ void ResolvePlayerVerticalCollisions(
 
                     StartBlockBump(tileRow, tileColumn);
                     ++coinCount;
+                    PlayGameSound(gameSounds.coin);
                     SpawnBlockCoin(blockCoins, tile);
 
                     auto activeBlock = std::find_if(
@@ -2178,6 +2310,7 @@ void ResolvePlayerVerticalCollisions(
                     hitTile = 'E';
                     StartBlockBump(tileRow, tileColumn);
                     ++coinCount;
+                    PlayGameSound(gameSounds.coin);
 
                     SpawnBlockCoin(blockCoins, tile);
                 }
@@ -2686,6 +2819,7 @@ bool HandlePlayerGoombaCollisions(
                 -stompBounceSpeed;
 
             player.onGround = false;
+            PlayGameSound(gameSounds.stomp);
 
             return false;
         }
@@ -2735,6 +2869,7 @@ bool HandlePlayerKoopaCollisions(
             player.body.y = koopa.body.y - player.body.height;
             player.velocity.y = -stompBounceSpeed;
             player.onGround = false;
+            PlayGameSound(gameSounds.stomp);
             return false;
         }
 
@@ -2755,6 +2890,7 @@ bool HandlePlayerKoopaCollisions(
                 // Stomping a moving shell brings it to a halt.
                 koopa.velocity.x = 0.0f;
                 koopa.shellReviveTimer = koopaShellReviveDuration;
+                PlayGameSound(gameSounds.stomp);
             }
             else
             {
@@ -2769,6 +2905,7 @@ bool HandlePlayerKoopaCollisions(
                     playerCentre < shellCentre
                         ? shellSpeed
                         : -shellSpeed;
+                PlayGameSound(gameSounds.kick);
             }
 
             player.velocity.y = -stompBounceSpeed;
@@ -2793,12 +2930,14 @@ bool HandlePlayerKoopaCollisions(
             player.body.x = koopa.body.x - player.body.width;
             player.velocity.x = 0.0f;
             koopa.velocity.x = shellSpeed;
+            PlayGameSound(gameSounds.kick);
         }
         else if (smallest == overlapRight)
         {
             player.body.x = koopa.body.x + koopa.body.width;
             player.velocity.x = 0.0f;
             koopa.velocity.x = -shellSpeed;
+            PlayGameSound(gameSounds.kick);
         }
         else if (smallest == overlapBottom)
         {
@@ -3607,7 +3746,8 @@ void DrawBrokenBrickAnimations(
 void DrawPlayer(
     const Player& player,
     const GameTextures& textures,
-    bool forceIdle = false
+    bool forceIdle = false,
+    int forcedStarPalette = -1
 )
 {
     if (
@@ -3641,17 +3781,22 @@ void DrawPlayer(
 
     bool usingSpecialStarPalette = false;
 
-    if (!player.dying && player.star)
+    if (!player.dying && (player.star || forcedStarPalette >= 0))
     {
         // SMB cycles four sprite palettes from the global frame counter.
         // The final eight 21-frame intervals slow from every two frames
         // to every eight frames to warn that star power is ending.
         constexpr float slowCycleDuration =
             8.0f * 21.0f / nesNtscFrameRate;
-        int framesPerColour =
-            player.starTimer <= slowCycleDuration ? 8 : 2;
-        int nesFrame = static_cast<int>(GetTime() * nesNtscFrameRate);
-        int palette = (nesFrame / framesPerColour) & 0x03;
+        int palette = forcedStarPalette;
+
+        if (palette < 0)
+        {
+            int framesPerColour =
+                player.starTimer <= slowCycleDuration ? 8 : 2;
+            int nesFrame = static_cast<int>(GetTime() * nesNtscFrameRate);
+            palette = (nesFrame / framesPerColour) & 0x03;
+        }
 
         const StarMarioTextures* starTextures = nullptr;
 
@@ -4433,6 +4578,7 @@ void RespawnPlayer(
     player.starTimer = 0.0f;
     player.damageTransformTimer = 0.0f;
     player.growthTransformTimer = 0.0f;
+    player.fireTransformTimer = 0.0f;
 
     jumpBufferTimer = 0.0f;
     coyoteTimer = 0.0f;
@@ -4574,6 +4720,121 @@ int main()
 
     SetWindowMinSize(640, 360);
     SetTargetFPS(60);
+
+    InitAudioDevice();
+    if (!IsAudioDeviceReady())
+    {
+        TraceLog(LOG_ERROR, "Failed to initialise the audio device.");
+        CloseWindow();
+        return 1;
+    }
+
+    Music backgroundMusic =
+        LoadMusicStream("resources/Sounds/music.mp3");
+    Music undergroundMusic =
+        LoadMusicStream("resources/Sounds/underground_music.mp3");
+    Music starMusic =
+        LoadMusicStream("resources/Sounds/star.mp3");
+
+    if (
+        !IsMusicValid(backgroundMusic) ||
+        !IsMusicValid(undergroundMusic) ||
+        !IsMusicValid(starMusic)
+    )
+    {
+        TraceLog(LOG_ERROR, "Failed to load one or more music tracks.");
+        if (IsMusicValid(backgroundMusic))
+        {
+            UnloadMusicStream(backgroundMusic);
+        }
+        if (IsMusicValid(undergroundMusic))
+        {
+            UnloadMusicStream(undergroundMusic);
+        }
+        if (IsMusicValid(starMusic))
+        {
+            UnloadMusicStream(starMusic);
+        }
+        CloseAudioDevice();
+        CloseWindow();
+        return 1;
+    }
+
+    backgroundMusic.looping = true;
+    undergroundMusic.looping = true;
+    starMusic.looping = true;
+    PlayMusicStream(backgroundMusic);
+
+    auto stopAllMusic =
+        [&backgroundMusic, &undergroundMusic, &starMusic]()
+    {
+        StopMusicStream(backgroundMusic);
+        StopMusicStream(undergroundMusic);
+        StopMusicStream(starMusic);
+    };
+
+    auto restartBackgroundMusic =
+        [&backgroundMusic, &undergroundMusic, &starMusic]()
+    {
+        StopMusicStream(undergroundMusic);
+        StopMusicStream(starMusic);
+        StopMusicStream(backgroundMusic);
+        SeekMusicStream(backgroundMusic, 0.0f);
+        PlayMusicStream(backgroundMusic);
+    };
+
+    auto restartUndergroundMusic =
+        [&backgroundMusic, &undergroundMusic, &starMusic]()
+    {
+        StopMusicStream(backgroundMusic);
+        StopMusicStream(starMusic);
+        StopMusicStream(undergroundMusic);
+        SeekMusicStream(undergroundMusic, 0.0f);
+        PlayMusicStream(undergroundMusic);
+    };
+
+    auto restartStarMusic =
+        [&backgroundMusic, &undergroundMusic, &starMusic]()
+    {
+        StopMusicStream(backgroundMusic);
+        StopMusicStream(undergroundMusic);
+        StopMusicStream(starMusic);
+        SeekMusicStream(starMusic, 0.0f);
+        PlayMusicStream(starMusic);
+    };
+
+    gameSounds = {
+        LoadSound("resources/Sounds/smb_1-up.wav"),
+        LoadSound("resources/Sounds/smb_breakblock.wav"),
+        LoadSound("resources/Sounds/smb_bump.wav"),
+        LoadSound("resources/Sounds/smb_coin.wav"),
+        LoadSound("resources/Sounds/smb_fireball.wav"),
+        LoadSound("resources/Sounds/smb_flagpole.wav"),
+        LoadSound("resources/Sounds/smb_jump-small.wav"),
+        LoadSound("resources/Sounds/smb_jump-super.wav"),
+        LoadSound("resources/Sounds/smb_kick.wav"),
+        LoadSound("resources/Sounds/smb_mariodie.wav"),
+        LoadSound("resources/Sounds/smb_pipe.wav"),
+        LoadSound("resources/Sounds/smb_powerup.wav"),
+        LoadSound("resources/Sounds/smb_powerup_appears.wav"),
+        LoadSound("resources/Sounds/smb_stage_clear.wav"),
+        LoadSound("resources/Sounds/smb_stomp.wav")
+    };
+
+    if (!AreGameSoundsLoaded(gameSounds))
+    {
+        TraceLog(LOG_ERROR, "Failed to load one or more game sounds.");
+        UnloadGameSounds(gameSounds);
+        StopMusicStream(backgroundMusic);
+        StopMusicStream(undergroundMusic);
+        StopMusicStream(starMusic);
+        UnloadMusicStream(backgroundMusic);
+        UnloadMusicStream(undergroundMusic);
+        UnloadMusicStream(starMusic);
+        CloseAudioDevice();
+        CloseWindow();
+        return 1;
+    }
 
     GameTextures textures{
         LoadTexture("resources/Blocks/Ground.png"),
@@ -5017,6 +5278,14 @@ int main()
         UnloadTexture(textures.castle);
         UnloadTexture(textures.title);
 
+        UnloadGameSounds(gameSounds);
+        StopMusicStream(backgroundMusic);
+        StopMusicStream(undergroundMusic);
+        StopMusicStream(starMusic);
+        UnloadMusicStream(backgroundMusic);
+        UnloadMusicStream(undergroundMusic);
+        UnloadMusicStream(starMusic);
+        CloseAudioDevice();
         CloseWindow();
         return 1;
     }
@@ -5056,6 +5325,7 @@ int main()
         0.0f,
         false,
         false,
+        0.0f,
         0.0f,
         0.0f,
         0.0f
@@ -5129,7 +5399,7 @@ int main()
     const float flagPoleTop =
         (flagMarkerRow + 2) * tileSize -
         textures.flagPole.height * flagScale;
-    const float flagTopY = flagPoleTop + tileSize;
+    const float flagTopY = flagPoleTop + tileSize - 22.0f;
     const float flagBottomY =
         (finishGroundRow - 1) * tileSize -
         textures.flag.height * flagScale;
@@ -5172,16 +5442,40 @@ int main()
     float jumpBufferTimer = 0.0f;
     float coyoteTimer = 0.0f;
     float pitRespawnTimer = 0.0f;
+    float deathSoundTimer = 0.0f;
+    float stageClearSoundTimer = 0.0f;
     bool pitDeathPending = false;
     int lastEnemyCollisionFrame = -1;
 
     while (!WindowShouldClose())
     {
+        if (IsMusicStreamPlaying(backgroundMusic))
+        {
+            UpdateMusicStream(backgroundMusic);
+        }
+        if (IsMusicStreamPlaying(undergroundMusic))
+        {
+            UpdateMusicStream(undergroundMusic);
+        }
+        if (IsMusicStreamPlaying(starMusic))
+        {
+            UpdateMusicStream(starMusic);
+        }
+
         float deltaTime =
             std::min(
                 GetFrameTime(),
                 0.05f
             );
+
+        deathSoundTimer = std::max(
+            0.0f,
+            deathSoundTimer - deltaTime
+        );
+        stageClearSoundTimer = std::max(
+            0.0f,
+            stageClearSoundTimer - deltaTime
+        );
 
         player.invulnerabilityTimer = std::max(
             0.0f,
@@ -5237,16 +5531,47 @@ int main()
             player.ducking = false;
         }
 
+        float previousFireTransformTimer =
+            player.fireTransformTimer;
+        player.fireTransformTimer = std::max(
+            0.0f,
+            player.fireTransformTimer - deltaTime
+        );
+
+        if (
+            previousFireTransformTimer > 0.0f &&
+            player.fireTransformTimer <= 0.0f
+        )
+        {
+            player.fire = true;
+        }
+
         player.fireThrowTimer = std::max(
             0.0f,
             player.fireThrowTimer - deltaTime
         );
 
+        float previousStarTimer = player.starTimer;
         player.starTimer = std::max(
             0.0f,
             player.starTimer - deltaTime
         );
         player.star = player.starTimer > 0.0f;
+
+        if (
+            previousStarTimer > 0.0f &&
+            player.starTimer <= 0.0f
+        )
+        {
+            if (inBonusArea)
+            {
+                restartUndergroundMusic();
+            }
+            else
+            {
+                restartBackgroundMusic();
+            }
+        }
 
         UpdateBlockBumps(
             deltaTime,
@@ -5263,13 +5588,15 @@ int main()
             pipeTransition == PipeTransition::None &&
             !inBonusArea &&
             !player.dying &&
-            player.growthTransformTimer <= 0.0f &&
+            !IsPlayerTransforming(player) &&
             player.body.x <= flagPoleX + tileSize &&
             player.body.x + player.body.width >= flagPoleX &&
             player.body.y + player.body.height >= flagPoleTop
         )
         {
             finishSequence = FinishSequence::Sliding;
+            stopAllMusic();
+            PlayGameSound(gameSounds.flagPole);
             SetPlayerDucking(player, false, level);
             player.body.x = flagPoleX - player.body.width - 2.0f;
             player.velocity = {0.0f, 0.0f};
@@ -5289,7 +5616,7 @@ int main()
         if (
             finishSequence == FinishSequence::None &&
             pipeTransition == PipeTransition::None &&
-            player.growthTransformTimer <= 0.0f &&
+            !IsPlayerTransforming(player) &&
             !player.dying &&
             player.onGround
         )
@@ -5299,15 +5626,21 @@ int main()
                 float pipeLeft = bonusEntrancePipeColumn * tileSize;
                 float pipeRight =
                     (bonusEntrancePipeColumn + 2) * tileSize;
+                float pipeMiddle = pipeLeft + tileSize;
                 float pipeTop = bonusEntrancePipeRow * tileSize;
-                float playerCentre =
-                    player.body.x + player.body.width / 2.0f;
+                float playerRight = player.body.x + player.body.width;
                 float playerBottom =
                     player.body.y + player.body.height;
+                float leftTileOverlap =
+                    std::min(playerRight, pipeMiddle) -
+                    std::max(player.body.x, pipeLeft);
+                float rightTileOverlap =
+                    std::min(playerRight, pipeRight) -
+                    std::max(player.body.x, pipeMiddle);
 
                 if (
-                    playerCentre >= pipeLeft &&
-                    playerCentre <= pipeRight &&
+                    leftTileOverlap >= 1.0f &&
+                    rightTileOverlap >= 1.0f &&
                     std::abs(playerBottom - pipeTop) <= 4.0f
                 )
                 {
@@ -5319,6 +5652,7 @@ int main()
                     player.onGround = false;
                     player.skidding = false;
                     player.sprinting = false;
+                    PlayGameSound(gameSounds.pipe);
                     pipeTransition = PipeTransition::EnteringBonusDown;
                 }
             }
@@ -5344,6 +5678,7 @@ int main()
                     player.facingLeft = false;
                     player.skidding = false;
                     player.sprinting = false;
+                    PlayGameSound(gameSounds.pipe);
                     pipeTransition =
                         PipeTransition::EnteringOverworldRight;
                 }
@@ -5427,6 +5762,8 @@ int main()
                 if (player.body.y >= playerGroundY)
                 {
                     finishSequence = FinishSequence::WalkingToCastle;
+                    PlayGameSound(gameSounds.stageClear);
+                    stageClearSoundTimer = stageClearSoundDuration;
                     player.facingLeft = false;
                     player.onGround = true;
                     player.velocity.y = 0.0f;
@@ -5474,8 +5811,11 @@ int main()
 
                 if (finishSequenceTimer <= 0.0f)
                 {
-                    finishSequence = FinishSequence::Blackout;
-                    finishSequenceTimer = 1.25f;
+                    if (stageClearSoundTimer <= 0.0f)
+                    {
+                        finishSequence = FinishSequence::Blackout;
+                        finishSequenceTimer = 1.25f;
+                    }
                 }
             }
             else if (finishSequence == FinishSequence::Blackout)
@@ -5519,9 +5859,11 @@ int main()
                     otherAreaFireBalls.clear();
                     pipeTransition = PipeTransition::None;
                     pitRespawnTimer = 0.0f;
+                    stageClearSoundTimer = 0.0f;
                     pitDeathPending = false;
                     flagY = flagTopY;
                     finishSequence = FinishSequence::None;
+                    restartBackgroundMusic();
                 }
             }
         }
@@ -5548,6 +5890,10 @@ int main()
                 {
                     swapAreaState();
                     inBonusArea = true;
+                    if (!player.star)
+                    {
+                        restartUndergroundMusic();
+                    }
 
                     Vector2 bonusSpawn = FindPlayerSpawn(level);
                     player.body.x = bonusSpawn.x +
@@ -5575,6 +5921,10 @@ int main()
                 {
                     swapAreaState();
                     inBonusArea = false;
+                    if (!player.star)
+                    {
+                        restartBackgroundMusic();
+                    }
 
                     float returnPipeLeft =
                         overworldReturnPipeColumn * tileSize;
@@ -5623,7 +5973,7 @@ int main()
                 }
             }
         }
-        else if (player.growthTransformTimer > 0.0f)
+        else if (IsPlayerTransforming(player))
         {
             player.sprinting = false;
             player.skidding = false;
@@ -5765,6 +6115,7 @@ int main()
                 0.0f
             });
 
+            PlayGameSound(gameSounds.fireBall);
             player.fireThrowTimer = 0.14f;
         }
 
@@ -5904,6 +6255,11 @@ int main()
             coyoteTimer > 0.0f
         )
         {
+            PlayGameSound(
+                player.big
+                    ? gameSounds.jumpSuper
+                    : gameSounds.jumpSmall
+            );
             player.velocity.y =
                 -jumpSpeed;
 
@@ -5974,6 +6330,11 @@ int main()
             jumpBufferTimer > 0.0f
         )
         {
+            PlayGameSound(
+                player.big
+                    ? gameSounds.jumpSuper
+                    : gameSounds.jumpSmall
+            );
             player.velocity.y =
                 -jumpSpeed;
 
@@ -6057,7 +6418,10 @@ int main()
         UpdateSuperStars(stars, level, deltaTime);
         if (!player.dying)
         {
-            CollectSuperStars(player, stars);
+            if (CollectSuperStars(player, stars))
+            {
+                restartStarMusic();
+            }
         }
 
         UpdateFireBalls(
@@ -6093,7 +6457,7 @@ int main()
 
         if (
             !player.dying &&
-            player.growthTransformTimer <= 0.0f
+            !IsPlayerTransforming(player)
         )
         {
             HitEnemiesAsStarMario(player, goombas, koopas);
@@ -6101,7 +6465,7 @@ int main()
 
         bool playerHitGoomba =
             !player.dying &&
-            player.growthTransformTimer <= 0.0f &&
+            !IsPlayerTransforming(player) &&
             HandlePlayerGoombaCollisions(
                 player,
                 goombas,
@@ -6110,7 +6474,7 @@ int main()
 
         bool playerHitKoopa =
             !player.dying &&
-            player.growthTransformTimer <= 0.0f &&
+            !IsPlayerTransforming(player) &&
             HandlePlayerKoopaCollisions(
                 player,
                 koopas,
@@ -6134,6 +6498,7 @@ int main()
                 damageInvulnerability;
             player.damageTransformTimer =
                 damageTransformDelay;
+            PlayGameSound(gameSounds.pipe);
 
             playerHitEnemy = false;
         }
@@ -6156,8 +6521,11 @@ int main()
 
             pitDeathPending = true;
             pitRespawnTimer = pitRespawnDelay;
+            deathSoundTimer = marioDeathSoundDuration;
             player.velocity.x = 0.0f;
             player.sprinting = false;
+            stopAllMusic();
+            PlayGameSound(gameSounds.marioDie);
         }
 
         if (pitDeathPending)
@@ -6173,6 +6541,8 @@ int main()
 
         if (playerHitEnemy)
         {
+            stopAllMusic();
+            deathSoundTimer = marioDeathSoundDuration;
             KillPlayer(player);
         }
 
@@ -6181,7 +6551,10 @@ int main()
             player.velocity.y > 0.0f &&
             player.body.y > cameraBottom + 100.0f;
 
-        if (pitRespawnReady || deathAnimationFinished)
+        if (
+            (pitRespawnReady || deathAnimationFinished) &&
+            deathSoundTimer <= 0.0f
+        )
         {
             if (inBonusArea)
             {
@@ -6221,7 +6594,9 @@ int main()
             otherAreaFireBalls.clear();
 
             pitRespawnTimer = 0.0f;
+            deathSoundTimer = 0.0f;
             pitDeathPending = false;
+            restartBackgroundMusic();
         }
 
         // --------------------------------
@@ -6486,10 +6861,31 @@ int main()
 
                 Player transformingPlayer = player;
                 transformingPlayer.big = drawBig;
-                transformingPlayer.fire = false;
+                transformingPlayer.fire = player.fire && drawBig;
                 transformingPlayer.onGround = true;
                 transformingPlayer.velocity = {0.0f, 0.0f};
                 DrawPlayer(transformingPlayer, textures, true);
+            }
+            else if (player.fireTransformTimer > 0.0f)
+            {
+                float animationTime =
+                    fireTransformDuration -
+                    player.fireTransformTimer;
+                int animationFrame = static_cast<int>(
+                    animationTime * nesNtscFrameRate
+                );
+                int palette = (animationFrame / 4) & 0x03;
+
+                Player transformingPlayer = player;
+                transformingPlayer.fire = false;
+                transformingPlayer.onGround = true;
+                transformingPlayer.velocity = {0.0f, 0.0f};
+                DrawPlayer(
+                    transformingPlayer,
+                    textures,
+                    true,
+                    palette
+                );
             }
             else
             {
@@ -6528,71 +6924,6 @@ int main()
         }
 
         EndMode2D();
-
-        DrawRectangle(
-            10,
-            10,
-            300,
-            125,
-            Fade(RAYWHITE, 0.8f)
-        );
-
-        DrawText(
-            "A/D or arrows: move",
-            20,
-            20,
-            20,
-            BLACK
-        );
-
-        DrawText(
-            "Shift: sprint",
-            20,
-            45,
-            20,
-            BLACK
-        );
-
-        DrawText(
-            player.fire
-                ? "W: jump / Space: fire"
-                : "Space or W: jump",
-            20,
-            70,
-            20,
-            BLACK
-        );
-
-        DrawText(
-            TextFormat(
-                "Coins: %d",
-                coinCount
-            ),
-            20,
-            120,
-            18,
-            BLACK
-        );
-
-        DrawText(
-            TextFormat(
-                "Goombas remaining: %d",
-                static_cast<int>(
-                    std::count_if(
-                        goombas.begin(),
-                        goombas.end(),
-                        [](const Goomba& goomba)
-                        {
-                            return goomba.alive;
-                        }
-                    )
-                )
-            ),
-            20,
-            100,
-            18,
-            BLACK
-        );
 
         if (finishSequence == FinishSequence::Blackout)
         {
@@ -6706,6 +7037,14 @@ int main()
     UnloadTexture(textures.title);
 
     UnloadRenderTexture(gameTexture);
+    UnloadGameSounds(gameSounds);
+    StopMusicStream(backgroundMusic);
+    StopMusicStream(undergroundMusic);
+    StopMusicStream(starMusic);
+    UnloadMusicStream(backgroundMusic);
+    UnloadMusicStream(undergroundMusic);
+    UnloadMusicStream(starMusic);
+    CloseAudioDevice();
     CloseWindow();
 
     return 0;

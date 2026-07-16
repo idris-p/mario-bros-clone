@@ -117,9 +117,12 @@ endif
 
 GENERATED :=
 OBJECTS :=
+RESOURCES :=
 
+GENERATED += $(OBJDIR)/application.res
 GENERATED += $(OBJDIR)/main.o
 OBJECTS += $(OBJDIR)/main.o
+RESOURCES += $(OBJDIR)/application.res
 
 # Rules
 # #############################################
@@ -127,7 +130,7 @@ OBJECTS += $(OBJDIR)/main.o
 all: $(TARGET)
 	@:
 
-$(TARGET): $(GENERATED) $(OBJECTS) $(LDDEPS) | $(TARGETDIR)
+$(TARGET): $(GENERATED) $(OBJECTS) $(LDDEPS) $(RESOURCES) | $(TARGETDIR)
 	$(PRELINKCMDS)
 	@echo Linking mario-bros-clone
 	$(SILENT) $(LINKCMD)
@@ -186,6 +189,9 @@ endif
 $(OBJDIR)/main.o: src/main.cpp
 	@echo "$(notdir $<)"
 	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
+$(OBJDIR)/application.res: src/application.rc
+	@echo "$(notdir $<)"
+	$(SILENT) $(RESCOMP) $< -O coff -o "$@" $(ALL_RESFLAGS)
 
 -include $(OBJECTS:%.o=%.d)
 ifneq (,$(PCH))
