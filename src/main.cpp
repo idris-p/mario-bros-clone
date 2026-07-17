@@ -4664,7 +4664,7 @@ int main()
     };
 
     Level bonusLevel{
-        "......P.................",
+        "bbbbb.P.bbbbbbb....Vv...",
         "bbbbb...bbbbbbb....Vv...",
         "bbbbb..............Vv...",
         "bbbbb..............Vv...",
