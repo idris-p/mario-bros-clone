@@ -25,7 +25,6 @@ constexpr float growthTransformDuration =
     59.0f / nesNtscFrameRate;
 constexpr float growthAnimationDelay =
     7.0f / nesNtscFrameRate;
-constexpr float fireTransformDuration = growthTransformDuration;
 constexpr float marioDeathSoundDuration = 2.7123f;
 constexpr float stageClearSoundDuration = 5.6415f;
 
@@ -1257,15 +1256,12 @@ void CollectFireFlowers(
             player.skidding = false;
             player.ducking = false;
         }
-        else
+        else if (!player.fire)
         {
-            if (!player.fire)
-            {
-                player.fireTransformTimer = fireTransformDuration;
-                player.sprinting = false;
-                player.skidding = false;
-                player.ducking = false;
-            }
+            player.fireTransformTimer = growthTransformDuration;
+            player.sprinting = false;
+            player.skidding = false;
+            player.ducking = false;
         }
     }
 }
@@ -6834,52 +6830,54 @@ int main()
             {
                 // Mario has entered the castle and is no longer visible.
             }
-            else if (player.growthTransformTimer > 0.0f)
+            else if (IsPlayerTransforming(player))
             {
-                constexpr bool growthSequence[] = {
-                    false, true, false, true, false,
-                    true, true, false, true, true
-                };
+                Player transformingPlayer = player;
+                transformingPlayer.onGround = true;
+                transformingPlayer.velocity = {0.0f, 0.0f};
+                int palette = -1;
 
-                float animationTime =
-                    growthTransformDuration -
-                    player.growthTransformTimer -
-                    growthAnimationDelay;
-
-                bool drawBig = false;
-                if (animationTime >= 0.0f)
+                if (player.growthTransformTimer > 0.0f)
                 {
-                    int animationFrame = std::clamp(
-                        static_cast<int>(
-                            animationTime * nesNtscFrameRate / 4.0f
-                        ),
-                        0,
-                        9
+                    constexpr bool growthSequence[] = {
+                        false, true, false, true, false,
+                        true, true, false, true, true
+                    };
+
+                    float animationTime =
+                        growthTransformDuration -
+                        player.growthTransformTimer -
+                        growthAnimationDelay;
+                    bool drawBig = false;
+                    if (animationTime >= 0.0f)
+                    {
+                        int animationFrame = std::clamp(
+                            static_cast<int>(
+                                animationTime *
+                                nesNtscFrameRate / 4.0f
+                            ),
+                            0,
+                            9
+                        );
+                        drawBig = growthSequence[animationFrame];
+                    }
+
+                    transformingPlayer.big = drawBig;
+                    transformingPlayer.fire =
+                        player.fire && drawBig;
+                }
+                else
+                {
+                    float animationTime =
+                        growthTransformDuration -
+                        player.fireTransformTimer;
+                    int animationFrame = static_cast<int>(
+                        animationTime * nesNtscFrameRate
                     );
-                    drawBig = growthSequence[animationFrame];
+                    palette = (animationFrame / 4) & 0x03;
+                    transformingPlayer.fire = false;
                 }
 
-                Player transformingPlayer = player;
-                transformingPlayer.big = drawBig;
-                transformingPlayer.fire = player.fire && drawBig;
-                transformingPlayer.onGround = true;
-                transformingPlayer.velocity = {0.0f, 0.0f};
-                DrawPlayer(transformingPlayer, textures, true);
-            }
-            else if (player.fireTransformTimer > 0.0f)
-            {
-                float animationTime =
-                    fireTransformDuration -
-                    player.fireTransformTimer;
-                int animationFrame = static_cast<int>(
-                    animationTime * nesNtscFrameRate
-                );
-                int palette = (animationFrame / 4) & 0x03;
-
-                Player transformingPlayer = player;
-                transformingPlayer.fire = false;
-                transformingPlayer.onGround = true;
-                transformingPlayer.velocity = {0.0f, 0.0f};
                 DrawPlayer(
                     transformingPlayer,
                     textures,

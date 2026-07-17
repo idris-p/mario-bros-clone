@@ -182,6 +182,10 @@ else
 $(OBJECTS): | prebuild
 endif
 
+# Resource compilation also writes into OBJDIR, so it must wait until the
+# prebuild target has created that directory.
+$(RESOURCES): | prebuild
+
 
 # File Rules
 # #############################################

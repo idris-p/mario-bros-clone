@@ -1,6 +1,22 @@
 -- Export Compile Commands module for clangd support
 require "ecc/ecc"
 
+-- Premake's GNU Make generator only makes compiled objects wait for the
+-- prebuild target that creates OBJDIR. Windows resources are emitted into the
+-- same directory, so give them the same order-only dependency.
+if _ACTION == "gmake" then
+    local gmake_cpp = premake.modules.gmake.cpp
+    premake.override(gmake_cpp, "pchRules", function(base, cfg, toolset)
+        base(cfg, toolset)
+        if cfg._gmake.filesets["RESOURCES"] then
+            _p("# Resource compilation also writes into OBJDIR, so it must wait until the")
+            _p("# prebuild target has created that directory.")
+            _p("$(RESOURCES): | prebuild")
+            _p("")
+        end
+    end)
+end
+
 newoption
 {
     trigger = "graphics",
