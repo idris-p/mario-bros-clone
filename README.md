@@ -18,7 +18,7 @@ A clone of Super Mario Bros. developed using C++ and raylib. I attempted to recr
 ## Prerequisites
 
 - A C++ compiler such as g++ is installed and added to PATH
-- mingw32-make is installed and added to PATH![Uploading Screenshot 2026-07-17 174300.png…]()
+- mingw32-make is installed and added to PATH
 
 
 ## How to Run
