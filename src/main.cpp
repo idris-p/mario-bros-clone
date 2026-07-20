@@ -5,7 +5,8 @@
 #include <string>
 #include <vector>
 
-// For erase_if (C++20)
+// erase_if implementation for older C++ versions (pre-C++20).  This is used to remove elements from a container based on a condition.
+// Add erase_if function to std namespace
 namespace std {
     template<typename Container, typename Predicate>
     typename Container::size_type erase_if(Container& c, Predicate pred) {
@@ -16,6 +17,7 @@ namespace std {
     }
 }
 
+// Define constants for NES NTSC frame rate and durations of various game events in seconds
 constexpr float nesNtscFrameRate = 60.0988f;
 constexpr float koopaShellReviveDuration =
     16.0f * 21.0f / nesNtscFrameRate;
@@ -140,7 +142,7 @@ struct SuperMushroom
 {
     Rectangle body;
     Vector2 velocity;
-    float targetY;
+    float targetY; // y position after emerging from block
     bool emerging;
     bool collected;
     bool oneUp;
@@ -203,7 +205,7 @@ void KillGoomba(Goomba& goomba)
     {
         PlayGameSound(gameSounds.kick);
         goomba.dying = true;
-        goomba.stomped = false;
+        goomba.stomped = false; // Goomba died not via stomp
         goomba.velocity = {0.0f, -240.0f};
     }
 }
@@ -224,7 +226,7 @@ void KillPlayer(Player& player)
     {
         PlayGameSound(gameSounds.marioDie);
         player.dying = true;
-        player.velocity = {0.0f, -650.0f};
+        player.velocity = {0.0f, -650.0f}; // Launch player upward when dying
         player.onGround = false;
         player.sprinting = false;
         player.ducking = false;
@@ -251,6 +253,7 @@ struct BlockCoin
     float age;
 };
 
+// Structure helps bumping blocks up and down when hit by player
 struct BlockBump
 {
     int row;
@@ -453,16 +456,17 @@ void UnloadStarMarioTextures(const StarMarioTextures& textures)
     UnloadTexture(textures.superWalk3);
 }
 
-using Level = std::vector<std::string>;
+using Level = std::vector<std::string>; // Type alias for a level
 
 // --------------------------------------------------
 // Window and rendering
 // --------------------------------------------------
 
+// 16:9 aspect ratio
 constexpr int initialWindowWidth = 1600;
 constexpr int initialWindowHeight = 900;
 
-constexpr int tileSize = 48;
+constexpr int tileSize = 48; // Each tile is 48x48 pixels
 
 constexpr int visibleTilesAcross = 24;
 constexpr float visibleTilesHigh = 13.5f;
@@ -470,10 +474,7 @@ constexpr float visibleTilesHigh = 13.5f;
 constexpr int virtualWidth =
     visibleTilesAcross * tileSize;
 
-constexpr int virtualHeight =
-    static_cast<int>(
-        visibleTilesHigh * tileSize
-    );
+constexpr int virtualHeight = static_cast<int>(visibleTilesHigh * tileSize);
 
 constexpr float cameraZoom = 1.0f;
 
@@ -532,11 +533,7 @@ void NormaliseLevel(Level& level)
 // Tile helpers
 // --------------------------------------------------
 
-bool IsSolidTile(
-    const Level& level,
-    int row,
-    int column
-)
+bool IsSolidTile(const Level& level, int row, int column)
 {
     if (
         row < 0 ||
@@ -570,6 +567,7 @@ bool IsSolidTile(
         tile == 'r';
 }
 
+// Returns rectangle shape made by a tile, taking into account the vertical offset from a block bump
 Rectangle GetTileRectangle(
     int row,
     int column
@@ -630,11 +628,9 @@ void UpdateBlockBumps(
             1.0f
         );
 
-        bump.offsetY =
-            -std::sin(progress * PI) * bumpHeight;
+        bump.offsetY = -std::sin(progress * PI) * bumpHeight; // Use sin between 0 and pi for smooth up and down motion
 
-        float movementY =
-            bump.offsetY - bump.previousOffsetY;
+        float movementY = bump.offsetY - bump.previousOffsetY;
 
         Rectangle previousBlock{
             static_cast<float>(bump.column * tileSize),
@@ -644,6 +640,7 @@ void UpdateBlockBumps(
             static_cast<float>(tileSize)
         };
 
+        // Function to carry a body up or down if it is on top of the block being bumped
         auto carryBody =
             [&previousBlock, movementY](Rectangle& body)
             {
@@ -810,11 +807,7 @@ Vector2 FindPlayerSpawn(const Level& level)
 {
     for (int row = 0; row < GetLevelRows(level); ++row)
     {
-        for (
-            int column = 0;
-            column < GetLevelColumns(level);
-            ++column
-        )
+        for (int column = 0; column < GetLevelColumns(level); ++column)
         {
             if (level[row][column] == 'P')
             {
@@ -833,10 +826,7 @@ Vector2 FindPlayerSpawn(const Level& level)
     return {100.0f, 300.0f};
 }
 
-std::vector<Coin> FindCoinSpawns(
-    const Level& level,
-    bool fullTile = false
-)
+std::vector<Coin> FindCoinSpawns(const Level& level, bool fullTile = false)
 {
     std::vector<Coin> coins;
 
@@ -845,11 +835,7 @@ std::vector<Coin> FindCoinSpawns(
 
     for (int row = 0; row < GetLevelRows(level); ++row)
     {
-        for (
-            int column = 0;
-            column < GetLevelColumns(level);
-            ++column
-        )
+        for (int column = 0; column < GetLevelColumns(level); ++column)
         {
             if (level[row][column] != 'C')
             {
@@ -959,8 +945,7 @@ std::vector<Koopa> FindKoopaSpawns(
     return koopas;
 }
 
-// Collect Coins
-
+// Forward declaration
 std::vector<Rectangle> GetNearbySolidTiles(
     const Level& level,
     const Rectangle& body
@@ -5443,6 +5428,7 @@ int main()
     bool pitDeathPending = false;
     int lastEnemyCollisionFrame = -1;
 
+    // Main game loop
     while (!WindowShouldClose())
     {
         if (IsMusicStreamPlaying(backgroundMusic))
@@ -6888,36 +6874,6 @@ int main()
             else
             {
                 DrawPlayer(player, textures);
-            }
-        }
-
-        if (IsKeyDown(KEY_F1))
-        {
-            DrawRectangleLinesEx(
-                player.body,
-                2.0f,
-                RED
-            );
-
-            for (const Goomba& goomba : goombas)
-            {
-                if (goomba.alive && goomba.spawned)
-                {
-                    DrawRectangleLinesEx(
-                        goomba.body,
-                        2.0f,
-                        RED
-                    );
-                }
-            }
-
-
-            for (const Koopa& koopa : koopas)
-            {
-                if (koopa.alive && koopa.spawned)
-                {
-                    DrawRectangleLinesEx(koopa.body, 2.0f, GREEN);
-                }
             }
         }
 
